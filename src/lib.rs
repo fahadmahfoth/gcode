@@ -15,6 +15,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod cli;
 pub mod error;
 pub mod utils;
 

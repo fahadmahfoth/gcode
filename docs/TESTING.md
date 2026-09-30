@@ -269,6 +269,43 @@ cargo fuzz run fuzz_classify -- -max_total_time=300
 Expected wall time: `cargo test` under 20 seconds. If it is slower, something
 loaded a model, and that is a bug in the test setup.
 
+### The MSRV audit
+
+`rust-version = "1.75"` in `Cargo.toml` is a promise, and a `cargo update` can
+break it without touching a single line of this repository. Cargo does **not**
+downgrade a dependency that has already been locked, and it does not check
+`rust-version` of dependencies when resolving on behalf of a newer toolchain —
+so `cargo update` will happily resolve a crate that needs Rust 1.85 and leave
+you to discover it on someone else's 1.75 machine.
+
+Run this after any `cargo update` or `cargo add`:
+
+```bash
+# Every package in the lockfile must declare rust-version <= 1.75.
+cargo metadata --format-version 1 --locked \
+  | python3 -c "
+import json, sys
+def rv(s):
+    return tuple(int(x) for x in s.split('.')) if s else (0, 0, 0)
+msrv = rv('1.75')
+meta = json.load(sys.stdin)
+bad = [(p['name'], p['version'], p.get('rust_version'))
+       for p in meta['packages'] if rv(p.get('rust_version')) > msrv]
+if bad:
+    for name, ver, need in bad:
+        print(f'{name} {ver} needs {need}')
+    sys.exit(1)
+print(f'OK: all {len(meta[\"packages\"])} packages build on 1.75')
+"
+```
+
+A failure here is fixed with `cargo update -p <crate> --precise <version>`, not
+by relaxing the floor. The alternative is to admit the MSRV moved, which is an
+ADR question, not a lockfile edit.
+
+CI runs this too, so the check that matters most is the one a contributor cannot
+skip locally.
+
 ---
 
 ## Related

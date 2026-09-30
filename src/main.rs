@@ -8,99 +8,78 @@
 //! terminal belongs in `ui/`, which does not exist yet (AGENTS.md section 4:
 //! no `println!` outside `main.rs` and `ui/`, so that `--json` stays honest).
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
-/// What the process should do, once the arguments have been understood.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Action {
-    /// Print the version and exit successfully.
-    Version,
-}
+use gcode::cli::{self, Mode};
 
 fn main() -> Result<()> {
-    let owned: Vec<String> = std::env::args().skip(1).collect();
-    let args: Vec<&str> = owned.iter().map(String::as_str).collect();
+    // `parse_from` exits the process itself for `--help` and `--version`, which
+    // is the one behaviour that has to bypass the Result type: both are
+    // successful outcomes with nothing to hand back.
+    let parsed = match cli::parse_from(std::env::args_os()) {
+        Ok(parsed) => parsed,
+        // clap raises `ErrorKind::DisplayHelp` and `DisplayVersion` for
+        // `--help` and `--version` and returns them here as `Err`. They are
+        // successful outcomes that happen to travel as errors, so they are
+        // separated from a real usage error: a script that runs
+        // `gcode --version` must not see a failure exit code.
+        Err(cli::ParseOutcome::Handled(outcome)) => {
+            print!("{outcome}");
+            std::process::exit(0);
+        }
+        Err(cli::ParseOutcome::Usage(message)) => {
+            eprintln!("gcode: {message}");
+            // 2, not 1: this is a usage error, and the exit code is what a
+            // script keys on to tell "you typed it wrong" from "it broke".
+            std::process::exit(2);
+        }
+    };
 
-    match parse(&args)? {
-        Action::Version => print_version(),
+    // Each mode lands in Phase 1.2 through 1.8. Until then each one names
+    // itself and says what is missing, rather than pretending to have run.
+    // `not_implemented` always fails, so reaching the end of this function is
+    // currently unreachable; returning Ok keeps that from being a lie if a
+    // future mode genuinely succeeds without further work here.
+    match parsed.mode {
+        Mode::Generate { .. } => not_implemented("generate"),
+        Mode::Fix => not_implemented("fix"),
+        Mode::Complete { .. } => not_implemented("complete"),
+        Mode::Explain { .. } => not_implemented("explain"),
+        Mode::Interactive => not_implemented("interactive"),
     }
-
-    Ok(())
 }
 
-/// Turns raw arguments into an [`Action`].
+/// Reports that a parsed mode has no implementation yet.
 ///
-/// Phase 0 has exactly one flag. Everything else is refused rather than ignored,
-/// because a silent no-op that exits 0 is indistinguishable from success: a typo
-/// would look like a completed run. The real surface arrives with the CLI layer
-/// in Phase 1.1, and this function is where it lands.
-///
-/// Arguments after the flag are tolerated so that `gcode --version` keeps
-/// working once the parser grows more options.
+/// Returns `Result` rather than calling `exit` directly so that every arm of
+/// the `match` above has the same type. Adding a `Mode` variant later makes the
+/// match non-exhaustive, so it cannot be forgotten.
 ///
 /// # Errors
 ///
-/// Returns an error when no arguments are given, or when the first argument is
-/// not a flag this build knows about.
-fn parse(args: &[&str]) -> Result<Action> {
-    match args.split_first() {
-        None => bail!(
-            "no request given; the generate mode (-c) arrives with the CLI layer in Phase 1.1"
-        ),
-        Some((flag, _)) if matches!(*flag, "--version" | "-V") => Ok(Action::Version),
-        Some((flag, _)) => bail!("unknown argument {flag:?}"),
-    }
-}
-
-/// Prints the version, taken from the manifest so the two cannot drift.
-fn print_version() {
-    println!("gcode {}", env!("CARGO_PKG_VERSION"));
+/// Always returns an error.
+fn not_implemented(mode: &str) -> Result<()> {
+    anyhow::bail!(
+        "the {mode} mode is parsed but not implemented yet; \
+         the inference pipeline lands in Phase 1"
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, Action};
+    use super::not_implemented;
 
     #[test]
-    fn long_version_flag_is_accepted() {
-        assert_eq!(parse(&["--version"]).unwrap(), Action::Version);
+    fn an_unimplemented_mode_names_itself() {
+        let message = not_implemented("generate").unwrap_err().to_string();
+        assert!(message.contains("generate"), "unhelpful: {message}");
     }
 
     #[test]
-    fn short_version_flag_is_accepted() {
-        assert_eq!(parse(&["-V"]).unwrap(), Action::Version);
-    }
-
-    #[test]
-    fn trailing_arguments_do_not_break_the_version_flag() {
-        assert_eq!(parse(&["--version", "--json"]).unwrap(), Action::Version);
-    }
-
-    #[test]
-    fn no_arguments_is_an_error_not_a_silent_version_print() {
-        // Bare `gcode` is the interactive mode documented in USAGE.md. Until
-        // that mode exists, refusing is the honest answer: printing a version
-        // and exiting 0 would read as a successful run.
-        let error = parse(&[]).unwrap_err().to_string();
-        assert!(error.contains("no request given"), "unhelpful: {error}");
-    }
-
-    #[test]
-    fn an_unknown_flag_names_itself() {
-        let error = parse(&["--dry-run"]).unwrap_err().to_string();
-        assert!(error.contains("--dry-run"), "unhelpful: {error}");
-    }
-
-    #[test]
-    fn a_near_miss_flag_is_still_rejected() {
-        // `--versions` must not be silently accepted as `--version`.
-        assert!(parse(&["--versions"]).is_err());
-        assert!(parse(&["-v"]).is_err());
-    }
-
-    #[test]
-    fn unknown_flags_fail_even_when_a_known_one_follows() {
-        // `--json --version` is not `--version`; refuse rather than skip.
-        assert!(parse(&["--json", "--version"]).is_err());
+    fn an_unimplemented_mode_says_it_is_not_done() {
+        // The whole point of the message is that it cannot be misread as a
+        // successful run.
+        let message = not_implemented("fix").unwrap_err().to_string();
+        assert!(message.contains("not implemented"), "unhelpful: {message}");
     }
 }

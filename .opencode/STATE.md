@@ -5,20 +5,23 @@
 > Last synced by hand: 2026-09-30.
 
 ```yaml
-phase: 0
-phase_name: Repository foundation
+phase: 1
+phase_name: Core inference pipeline
 phase_status: in_progress
-first_incomplete_task: 0.8
+first_incomplete_task: 1.2
 
 # Phases, in order. `next` is the only actionable one.
 phases:
   - id: 0
     name: "Repository foundation"
+    # Rust half is done and verified on macOS. Still open: the Linux x86_64
+    # build and a green CI run, which is what tasks 0.8 and 0.12 need.
     status: in_progress
-    next: true
+    next: false
   - id: 1
     name: "Core inference pipeline"
-    status: not_started
+    status: in_progress
+    next: true
   - id: 2
     name: "Shell integration & history"
     status: blocked
@@ -75,9 +78,21 @@ platforms_verified:
   - macOS aarch64 (rustc 1.98.1)
 platforms_unverified:
   - Linux x86_64
-last_verified: "macOS aarch64, rustc 1.98.1: `cargo build --release --locked` passed; `cargo test` 34 passed / 0 failed (22 lib + 7 bin + 5 integration); `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo check --no-default-features` passed; `gcode --version` -> 'gcode 0.1.0' exit 0; bare `gcode` and unknown flags exit 1; credential-shape scan of the tree found nothing"
-last_command: "cargo test, then cargo clippy --all-targets --all-features -- -D warnings, then the release smoke test"
+last_verified: "macOS aarch64, rustc 1.98.1, after 1.1: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 61 passed / 0 failed (54 lib + 2 bin + 5 integration); `cargo build --release --locked` passed; MSRV audit over `cargo metadata --locked` confirms all 43 locked packages declare rust-version <= 1.75; exit codes confirmed by running the release binary: --version and --help exit 0, usage errors exit 2, parsed-but-unimplemented modes exit 1"
+last_command: "cargo test, cargo clippy --all-targets --all-features -- -D warnings, then a scripted exit-code matrix over target/release/gcode"
 ```
+
+### Known open items, not yet recorded above
+
+- `Cargo.toml`'s release profile sets `panic = "abort"` while ADR 0002 mandates
+  `panic = "unwind"`. The comment above the profile claims the profile meets the
+  ADR. One of the two is wrong and only the human can say which. Human-only per
+  AGENTS.md section 6.
+- `docs/CONTRIBUTING.md` says pull requests target `main`. There is no `main`
+  branch and the default is `master`. The CI push trigger was corrected to
+  `master`; the prose in CONTRIBUTING is still wrong.
+- Disk was at ~270 MiB free against a 100%-full volume. Phase 1.5 needs
+  `llama-cpp-rs`, which builds C++ and will fail partway through on a full disk.
 
 ---
 

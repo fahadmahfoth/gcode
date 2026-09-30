@@ -63,6 +63,19 @@ anyhow = "1"
 # (AGENTS.md section 4).
 dirs = "5"
 
+# Argument parsing for the CLI layer (Phase 1.1).
+#
+# The requirement is "4.5", not "4", and that is deliberate. clap 4.6 raised its
+# own `rust-version` to 1.85, which is above the 1.75 floor ADR 0002 sets. A
+# caret requirement of "4" would resolve to 4.6.x and then fail to build on a
+# 1.75 toolchain with a confusing error from inside a dependency. Pinning to the
+# 4.5 line keeps the whole tree resolvable at the declared MSRV.
+#
+# The lockfile additionally pins clap_lex to 1.0.1 for the same reason: its
+# 1.1.x line also requires 1.85. `cargo update` will happily undo both, so the
+# MSRV audit in docs/TESTING.md is not optional.
+clap = { version = "4.5", features = ["derive"] }
+
 # No [dev-dependencies] yet. Every task that adds a test adds the fixtures it
 # needs in the same change. Tests use FakeEngine, never a real model.
 

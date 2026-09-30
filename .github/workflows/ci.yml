@@ -1,8 +1,16 @@
 name: CI
 
 on:
+  # `master` is this repository's default branch. There is no `main`: the
+  # initial commit landed on `master` and `origin/HEAD` points there. Naming
+  # `main` here meant the workflow never ran at all — zero runs after two
+  # pushes — which is what a `🟡 written, never executed` row in the roadmap
+  # is supposed to prevent.
+  #
+  # Add `develop` when a staging branch exists. Until then, listing a branch
+  # that has no pushes is dead configuration.
   push:
-    branches: [main, develop]
+    branches: [master]
   pull_request:
 
 # See AGENTS.md and docs/RELEASING.md.

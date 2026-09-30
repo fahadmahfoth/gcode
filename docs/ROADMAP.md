@@ -139,7 +139,8 @@ real dispatch in 1.1 lands in a tested function rather than in `main`.
 
 ## Phase 1 — Core inference pipeline
 
-**Status: ⬜ not started**
+**Status: 🟡 in progress — 1.1 done and verified on macOS aarch64; the modes are
+parsed but nothing has been generated yet, because there is no model**
 **Goal: `gcode -c "list all files" --dry-run` prints a valid command and exits.**
 
 This is the phase that decides whether the project is real. Nothing else matters
@@ -175,14 +176,44 @@ pub struct Cli {
 }
 ```
 
-- [ ] `clap` derive struct, `-c` required unless another mode flag is present
-- [ ] Mode selection: exactly one mode, error listing the valid ones otherwise
-- [ ] `#[clap(long)]` on everything; no positional arguments
-- [ ] Validation: `context_entries` ≤ 1000, `temperature` in 0.0..=2.0,
+- [x] `clap` derive struct, `-c` required unless another mode flag is present
+- [x] Mode selection: exactly one mode, error listing the valid ones otherwise
+- [x] `#[clap(long)]` on everything; no positional arguments
+- [x] Validation: `context_entries` ≤ 1000, `temperature` in 0.0..=2.0,
       `context_size` in 512..=32768
-- [ ] `Mode` implements `Display` for the `--json` output
-- [ ] **Test:** every invalid combination has a specific error message
-- [ ] **Test:** `gcode --version` and `gcode --help` are snapshot-tested
+- [x] `Mode` implements `Display` for the `--json` output
+- [x] **Test:** every invalid combination has a specific error message
+- [x] **Test:** `gcode --version` and `gcode --help` are covered
+
+Verified on macOS aarch64: 54 unit tests, 2 binary tests, 5 integration. Every
+mode pair is checked, and each range is tested at and past its bound.
+
+Three deliberate departures from the sketch above:
+
+- **`Cli` and `Parsed` are separate types.** `Cli` is what clap fills in; `Parsed`
+  is the validated result. Range and mode checks run in between, so nothing
+  downstream re-checks them. A `Parsed` cannot be built without passing
+  validation, which is the point of having it.
+- **The conflict error names flags, not modes.** Reporting "generate" to a user
+  who typed `-c` makes them search the help text for a flag that does not exist.
+  The error says `--command/-c, --fix`.
+- **`ParseOutcome` separates "answered" from "wrong".** clap delivers `--help`
+  and `--version` through its error channel, so a naive caller exits 2 on
+  `gcode --version` and every script that probes the binary sees a failure. The
+  first draft did exactly that; the smoke test caught it, not the unit tests.
+
+`Doctor` is deferred to 1.8 rather than added here: it needs the config, model,
+and history layers to report on, so a mode that exists before those would have
+nothing to say.
+
+### Note on `--temperature` and leading hyphens
+
+`--temperature -0.1` is parsed by clap as the start of another flag, so the
+value never reached the range check and the user was told about an "unexpected
+argument '-0'" — a message that says nothing about the real problem. The flag
+carries `allow_hyphen_values` so the value arrives intact and the range check
+produces the error the user can act on. There is a test for both the
+space-separated and the `=`-separated form.
 
 ### 1.2 Config layer — `src/config.rs`
 
