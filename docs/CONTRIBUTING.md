@@ -14,7 +14,7 @@ below and `AGENTS.md` at the repository root.
 ## Quick start
 
 ```bash
-git clone https://github.com/fahadmf/gcode.git
+git clone https://github.com/fahadmahfoth/gcode.git
 cd gcode
 rustup toolchain install            # rust-toolchain.toml pins the version
 cargo build

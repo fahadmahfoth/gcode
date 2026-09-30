@@ -183,7 +183,7 @@ Targets, measured on 2 physical cores with no GPU. Real numbers from
 ## Contributing
 
 ```bash
-git clone https://github.com/fahadmf/gcode.git
+git clone https://github.com/fahadmahfoth/gcode.git
 cd gcode && cargo build && cargo test
 ```
 

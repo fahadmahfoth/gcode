@@ -1,0 +1,29 @@
+# The toolchain this repository is built with.
+#
+# ADR 0009 treats the build as reproducible: a committed Cargo.lock, --locked
+# everywhere, and a dependency tree that cannot drift between a maintainer's
+# laptop and CI.
+#
+# The channel is `stable`, not an exact patch version, and that is a deliberate
+# trade rather than an oversight. An exact pin such as `channel = "1.98.1"`
+# makes rustup treat that version as a toolchain separate from `stable` and
+# download a second full copy — roughly 1.3 GB — the first time anyone builds
+# here. On a machine without that headroom the download fails partway through,
+# and rustup's rollback then removes components from the working toolchain. It
+# did exactly that on the first attempt at writing this file.
+#
+# What the pin gave up: the compiler is now the one build input the lockfile
+# does not pin. A new stable release can therefore change what compiles. The
+# mitigations are the MSRV floor in Cargo.toml (`rust-version = "1.75"`), CI
+# building on several platforms, and the fact that a compiler regression shows
+# up as a red build rather than a subtly different binary. Revisit the exact pin
+# once CI can hold a toolchain image and the release matrix is stable.
+[toolchain]
+channel = "stable"
+# rustfmt and clippy are not optional: AGENTS.md section 8 runs both as a
+# pre-commit gate, and a toolchain without them silently skips the gate.
+components = ["rustfmt", "clippy"]
+# Deliberately no `targets` key. Cross-compilation is owned by cargo-dist
+# (ADR 0015), which adds each release target at build time, and a targets list
+# here would make every fresh clone download every std it lists. The six release
+# targets are recorded in dist-workspace.toml and docs/RELEASING.md.

@@ -1,0 +1,116 @@
+# gcode — a local-first, offline natural-language-to-shell-command tool.
+#
+# Constraints on this manifest come from the decision records, not from taste:
+#
+#   ADR 0002  Rust 1.75+, edition 2021, one static binary, panic = "abort",
+#             musl targets on Linux, and an FFI boundary to llama.cpp that is
+#             never allowed to leak into the classifier.
+#   ADR 0009  Dependencies come from crates.io with a committed Cargo.lock.
+#             Builds are --locked. No vendored sources. Licence allowlist is
+#             enforced by cargo-deny, advisories by cargo-audit.
+#   ADR 0001  No network except the model downloader. The `download` feature
+#             below is the only thing that may ever pull in an HTTP client, and
+#             CI fails the build if one appears anywhere but the downloader.
+#   ADR 0004  src/safety/ is a pure function from command string to verdict. It
+#             depends on nothing in this manifest except the standard library
+#             and the regex table. If a future edit adds a dependency to the
+#             safety layer, that is a safety regression, not a feature.
+
+[package]
+name = "gcode"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Turns a sentence into a shell command, classifies the risk, and asks before it runs. Local-first and offline."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/fahadmahfoth/gcode"
+keywords = ["cli", "shell", "bash", "offline", "llm", "security"]
+categories = ["command-line-utilities", "development-tools"]
+# This is an application, not a library. It is never published to crates.io;
+# releases are signed binaries built by cargo-dist (ADR 0015).
+publish = false
+
+[features]
+default = []
+
+# Compiles the llama.cpp FFI boundary and the grammar-constrained decoder.
+# Empty until Phase 1.4 attaches llama-cpp-rs and llguidance, because those two
+# crates carry the real inference cost and Phase 0 must stay buildable without a
+# C++ toolchain. Kept as an explicit, named switch from the start so that the
+# "no model, no inference code" state is a reviewable decision and not an
+# accident. See ADR 0002 and ADR 0003.
+inference = []
+
+# Permits the model downloader to reach the network. This is the ONLY feature
+# allowed to enable an HTTP client, and CI asserts that the corresponding code
+# lives in exactly one file, src/model/download.rs. See ADR 0001.
+download = []
+
+# Dependencies are declared as the modules that use them are written, not
+# up front. A crate listed here before it is used is an unbuilt, unaudited,
+# unmeasured liability, and cargo-deny would carry it in every licence scan for
+# no benefit. The order lands in Phase 1.
+[dependencies]
+# Library errors, as opposed to context. AGENTS.md section 4: a library hands
+# back a typed error; the caller adds context.
+thiserror = "1"
+
+# Context only. Never in a public API, never in a return type.
+anyhow = "1"
+
+# XDG base directories, so path resolution goes through one place per platform
+# (AGENTS.md section 4).
+dirs = "5"
+
+# No [dev-dependencies] yet. Every task that adds a test adds the fixtures it
+# needs in the same change. Tests use FakeEngine, never a real model.
+
+# Lint levels. These live here rather than in .clippy.toml because .clippy.toml
+# accepts only clippy's own configuration keys, not lint names — a `pedantic`
+# line in that file is a hard error, not a silent no-op.
+#
+# priority keeps the group lints from outranking the specific allows below, so
+# that `pedantic` cannot re-enable something this file deliberately turned off.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+# Individually justified, rather than blanket-allowed.
+#
+# module_name_repetitions: `gcode::utils::paths::config_dir` reads better than
+#   `gcode::utils::paths::config_dir_path`. The repetition is worth the clarity.
+module_name_repetitions = "allow"
+# A `Result<PathBuf, _>` in a public signature is self-describing. The doc
+# comment says what happens on failure, which is the part a reader needs.
+must_use_candidate = "allow"
+# The MSRV floor above is authoritative. Suggesting an API newer than it would
+# be a suggestion to break the promise in ADR 0002.
+incompatible_msrv = "warn"
+# No function in this crate can fail by panicking on purpose. If one ever does,
+# it needs a `missing_panics_doc` entry, which is the point of the deny.
+missing_panics_doc = "deny"
+
+# Release profile. ADR 0002 sets the constraints; these are how they are met.
+[profile.release]
+# A CLI that hits an unexpected state should exit loudly rather than unwind
+# through a Drop that might write a half-finished history entry.
+panic = "abort"
+opt-level = 3
+# Whole-program optimisation and a single codegen unit. Slower to build, and
+# this is a build-once-ship-everywhere binary, so the trade is correct.
+lto = "fat"
+codegen-units = 1
+# The size budget in ADR 0002 is 15 MB stripped. Symbols are for the people
+# reading crash reports, not for the people running the tool.
+strip = "symbols"
+incremental = false
+
+# There is deliberately no [profile.test]. `panic = "unwind"` there is ignored
+# by cargo, which emits a warning saying so: the test profile always unwinds, so
+# that a failing assertion reports rather than aborting the whole suite. Setting
+# it anyway would be a comment that lies, which is the exact thing the rest of
+# this file avoids.

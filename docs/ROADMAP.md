@@ -63,20 +63,20 @@ only so the design decisions of v1.0 do not paint us into a corner.
 
 ## Phase 0 — Repository foundation
 
-**Status: 🟡 in progress — the documentation and tooling half is done, the Rust
-half is not started**
+**Status: 🟡 in progress — the Rust half builds, tests, and lints clean on macOS
+aarch64; Linux x86_64 and the CI run are still unverified**
 **Goal: a repository where `cargo build` works on a maintainer's laptop.**
 
 ### Tasks
 
 | # | Task | File | Status |
 |---|---|---|---|
-| 0.1 | Cargo manifest, features, release profile | `Cargo.toml` | ⬜ |
-| 0.2 | Dependency pinning + MSRV | `rust-toolchain.toml` | ⬜ |
-| 0.3 | `src/main.rs` skeleton that prints version | `src/main.rs` | ⬜ |
-| 0.4 | Error types | `src/error.rs` | ⬜ |
-| 0.5 | Path resolution | `src/utils/paths.rs` | ⬜ |
-| 0.6 | Lint + format config | `.rustfmt.toml`, `.clippy.toml` | ⬜ |
+| 0.1 | Cargo manifest, features, release profile | `Cargo.toml` | ✅ compiles, 3 deps |
+| 0.2 | Dependency pinning + MSRV | `rust-toolchain.toml` | ✅ stable + rustfmt/clippy |
+| 0.3 | `src/main.rs` skeleton that prints version | `src/main.rs` | ✅ `--version`, `-V` |
+| 0.4 | Error types | `src/error.rs` | ✅ 2 variants, no `unwrap` |
+| 0.5 | Path resolution | `src/utils/paths.rs` | ✅ 4 env overrides, 22 unit tests |
+| 0.6 | Lint + format config | `.rustfmt.toml`, `.clippy.toml` | ✅ `pedantic` clean |
 | 0.7 | Gitignore, deny list | `.gitignore` | ✅ |
 | 0.8 | CI: fmt, clippy, test, build matrix | `.github/workflows/ci.yml` | 🟡 written, never executed |
 | 0.9 | Licence, contributing, security policy | `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md` | ✅ |
@@ -86,23 +86,54 @@ half is not started**
 
 ### Acceptance criteria
 
-- [ ] `cargo build --release` succeeds on Linux x86_64 and macOS aarch64
-- [ ] `cargo test` passes
-- [ ] `cargo fmt --check` and `cargo clippy -D warnings` are clean
+- [ ] `cargo build --release` succeeds on Linux x86_64 **and** macOS aarch64
+      — ✅ macOS aarch64 (rustc 1.98.1). ⬜ Linux x86_64 not built yet.
+- [x] `cargo test` passes — 34 passed, 0 failed
+- [x] `cargo fmt --check` and `cargo clippy -D warnings` are clean
 - [ ] CI runs green on a push
 - [x] `README.md`, `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md` present
 - [x] No credential-shaped string anywhere in the tracked tree
 - [x] `AGENTS.md` tells an agent what to do next
 
-None of the four unchecked criteria can be met yet: there is no `Cargo.toml`,
-no `src/`, and no Rust toolchain on the machine that wrote this. The two
-`🟡 written, never executed` rows are honest but not complete — a workflow that
-has never run is not a passing workflow.
+Two of the four unchecked items are things only CI can settle: a Linux build and
+a green run. A workflow that has never run is not a passing workflow, so 0.8 and
+0.12 stay 🟡 no matter how confident the YAML looks.
 
 ### What unblocks this phase
 
-Install a Rust toolchain, then let the agent run Phase 0.1–0.6. Everything in
-this repository that claims a working build is a target, not a result.
+A push, so 0.8 can run on both platforms and settle the two remaining criteria.
+
+### Note on task 0.1
+
+**The manifest declares three dependencies and no more** — `thiserror`,
+`anyhow`, `dirs` — because those are the only ones the Phase 0 modules use.
+`llama-cpp-rs`, `llguidance`, and `reqwest` are deliberately absent. Their
+versions are resolved in Phase 1 with `cargo add`, where the registry is
+reachable. Writing a guessed version here would produce a manifest that fails
+`--locked` on its first build, which is the one outcome worse than not having
+written it.
+
+The `inference` and `download` features are declared but empty for the same
+reason: they must exist before any code can be gated behind them, and they get
+their dependency in Phase 1.
+
+### Note on task 0.2
+
+`rust-toolchain.toml` pins the **stable channel**, not a patch version. Two
+reasons. A hard `1.98.1` pin makes a contributor on a newer patch unable to build
+without editing the file, and the pin is what triggered a duplicate ~45 MB
+toolchain download on the machine that wrote it — a failure mode a channel pin
+does not have. `rust-version = "1.75"` in `Cargo.toml` remains the real floor, and
+`clippy::incompatible_msrv` is enabled to enforce it.
+
+### Note on task 0.3
+
+Bare `gcode` exits non-zero with a message. It does **not** print the version and
+exit 0. USAGE.md documents bare `gcode` as the interactive mode, which is
+⛔ planned; printing a version there would make an unimplemented mode look like a
+completed run, which is the exact failure the same file's unknown-flag branch was
+written to prevent. Argument parsing is a pure function with unit tests, so the
+real dispatch in 1.1 lands in a tested function rather than in `main`.
 
 ---
 

@@ -8,7 +8,7 @@
 phase: 0
 phase_name: Repository foundation
 phase_status: in_progress
-first_incomplete_task: 0.1
+first_incomplete_task: 0.8
 
 # Phases, in order. `next` is the only actionable one.
 phases:
@@ -47,8 +47,8 @@ phases:
     name: "WASM plugin system"
     status: planned
 
-code_written: false
-tests_written: false
+code_written: true
+tests_written: true
 coverage_measured: null
 coverage_target: 85
 
@@ -63,11 +63,20 @@ needs_human_later:
   - get.gcode.dev domain
   - Public launch posting accounts
 
-# No Rust toolchain on the machine that produced this file, so nothing
-# involving cargo has ever been run here. Do not record one until it has.
-toolchain_present: false
-last_verified: null
-last_command: null
+# Verified present. See `last_verified` for what was actually run against it.
+toolchain_present: true
+
+# Compiled, and `--locked` clean. The three declared dependencies are the only
+# ones the Phase 0 modules use; `inference` and `download` stay empty until
+# Phase 1 resolves their versions.
+manifest_written: true
+manifest_compiled: true
+platforms_verified:
+  - macOS aarch64 (rustc 1.98.1)
+platforms_unverified:
+  - Linux x86_64
+last_verified: "macOS aarch64, rustc 1.98.1: `cargo build --release --locked` passed; `cargo test` 34 passed / 0 failed (22 lib + 7 bin + 5 integration); `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo check --no-default-features` passed; `gcode --version` -> 'gcode 0.1.0' exit 0; bare `gcode` and unknown flags exit 1; credential-shape scan of the tree found nothing"
+last_command: "cargo test, then cargo clippy --all-targets --all-features -- -D warnings, then the release smoke test"
 ```
 
 ---
@@ -84,6 +93,7 @@ last_command: null
 | `needs_human_later` | Known future blockers, recorded so they are not discovered at the end |
 | `last_verified` | The last verification command that actually ran, and its result |
 | `toolchain_present` | `false` means `cargo` is unavailable, so no Rust claim can be verified |
+| `platforms_unverified` | Platforms in the build matrix with no successful build recorded |
 
 ## Rules for updating
 

@@ -1,0 +1,20 @@
+# Clippy configuration that cannot live in Cargo.toml.
+#
+# Lint *levels* are in the [lints.clippy] table of Cargo.toml. This file holds
+# only clippy's own configuration keys, of which the useful ones for this crate
+# are the `allow-*-in-tests` family.
+#
+# src/lib.rs sets `#![warn(clippy::unwrap_used)]` and friends, so that unwrap,
+# expect, and panic are a compile error outside tests. Without these five lines
+# the test suite emits a warning for every single assertion it makes, which is
+# several hundred warnings that teach everyone to ignore the output. With them,
+# the test suite is quiet and the gate stays at full strength in shipped code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+
+# gcode is a small crate with a short, shallow call graph. The default
+# complexity heuristics are tuned for large codebases and would not fire here,
+# so they are left alone rather than tuned into irrelevance.

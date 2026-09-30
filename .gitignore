@@ -28,8 +28,10 @@ history.jsonl
 history.jsonl.*
 
 # ── Build output ─────────────────────────────────────────────────────────
-dist/
-build/
+# Anchored to the repository root on purpose. An unanchored `build/` would
+# also match a future `src/build/` module and silently drop it from the tree.
+/dist/
+/build/
 *.deb
 *.rpm
 *.AppImage

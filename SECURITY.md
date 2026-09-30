@@ -103,7 +103,7 @@ Stated here so they are not mistaken for oversights:
 ```bash
 gh attestation verify gcode-x86_64-apple-darwin.tar.gz --repo fahadmf/gcode
 cosign verify-blob gcode-x86_64-apple-darwin.tar.gz \
-  --certificate-identity-regexp 'https://github.com/fahadmf/gcode/.*' \
+  --certificate-identity-regexp 'https://github.com/fahadmahfoth/gcode/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 

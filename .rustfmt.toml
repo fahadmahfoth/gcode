@@ -1,0 +1,30 @@
+# Formatting is not negotiable, because a diff that contains only formatting
+# is a diff nobody has to read.
+#
+# Stable options only. Several tempting ones — wrap_comments, comment_width,
+# normalize_comments, format_code_in_doc_comments, imports_granularity,
+# group_imports, where_single_line — are nightly-only, and listing them here on
+# a stable toolchain makes rustfmt print a warning and carry on. A config file
+# full of ignored keys is worse than no config file: it looks enforced and is
+# not. If the project ever moves to a nightly formatter, add them then, in the
+# same commit that moves the toolchain.
+edition = "2021"
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true
+force_explicit_abi = true
+reorder_imports = true
+reorder_modules = true
+
+# The defaults below are kept, but written down so a reader knows they are
+# decisions rather than omissions.
+tab_spaces = 4
+hard_tabs = false
+struct_lit_width = 18
+fn_call_width = 60
+attr_fn_like_width = 70
+struct_variant_width = 35
+array_width = 60
+chain_width = 60
+single_line_if_else_max_width = 50

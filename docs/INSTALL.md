@@ -105,7 +105,7 @@ persists in the mounted volume, never in the container layer.
 You need Rust 1.75+.
 
 ```bash
-git clone https://github.com/fahadmf/gcode.git
+git clone https://github.com/fahadmahfoth/gcode.git
 cd gcode
 cargo build --release
 ./target/release/gcode --version
@@ -190,9 +190,10 @@ See [MODELS.md](MODELS.md) for the full registry, custom model setup, and tuning
 
 ```bash
 gcode --init --remove                      # shell hooks first
-rm -f ~/.gcode/config.toml                 # config (keeps history)
-rm -rf ~/.gcode/history.jsonl              # history
-rm -f ~/.local/share/gcode/models/*.gguf   # model cache
+rm -f ~/.config/gcode/config.toml          # config (keeps history)
+rm -f ~/.gcode/history.jsonl               # history
+rm -f ~/.local/share/gcode/models/*.gguf   # model cache, Linux
+rm -f ~/Library/Application\ Support/gcode/models/*.gguf   # macOS
 rm -f "$(command -v gcode)"                # binary
 ```
 
@@ -221,11 +222,17 @@ a diagnosis, and it is written to `docs/TROUBLESHOOTING.md` as a checklist.
 | Platform | Config | Data | Models |
 |---|---|---|---|
 | Linux | `~/.config/gcode/config.toml` | `~/.local/share/gcode/` | `~/.local/share/gcode/models/` |
-| macOS | `~/.config/gcode/config.toml` | `~/.gcode/` | `~/Library/Application Support/gcode/models/` |
-| Docker | `/root/.config/gcode/` | `/root/.gcode/` | baked into image |
+| macOS | `~/.config/gcode/config.toml` | `~/Library/Application Support/gcode/` | `~/Library/Application Support/gcode/models/` |
+| Docker | `/root/.config/gcode/` | `/root/.local/share/gcode/` | baked into image |
 
 History is `~/.gcode/history.jsonl` on all platforms, mode `0600`. It never
-leaves the machine.
+leaves the machine. It is deliberately **not** inside the data directory: ADR
+0005 fixes that location, and an accepted ADR is not changed quietly. `gcode` has
+no `data` subdirectory to put it in.
+
+Config is `~/.config/gcode` on macOS too, not `~/Library/Application
+Support`. A config file is something you edit by hand, and one location for
+every platform is easier to document and easier to remember.
 
 ---
 

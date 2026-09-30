@@ -65,7 +65,7 @@ If it persists, the release may genuinely be mis-signed. Verify independently
 before proceeding:
 
 ```bash
-curl -fsSL https://github.com/fahadmf/gcode/releases/download/v1.0.0/checksums.txt
+curl -fsSL https://github.com/fahadmahfoth/gcode/releases/download/v1.0.0/checksums.txt
 shasum -a 256 gcode-x86_64-apple-darwin.tar.gz
 ```
 
