@@ -96,7 +96,9 @@ is refused again.
 .BI \-\-context " " \fIN\fR
 Read the last
 .I N
-history entries as context. Default 15, maximum 1000.
+history entries as context. Maximum 1000. Defaults to the
+.B context.history_entries
+configuration value, 15 out of the box.
 .TP
 .B \-\-no\-history
 Ignore shell history entirely.
@@ -131,20 +133,25 @@ Re-download the default model if its checksum has changed.
 Set the model in the configuration file permanently.
 .TP
 .BI \-\-n\-threads " " \fIN\fR
-Number of inference threads. Default 0, meaning all physical cores. Values above
-the physical core count reduce performance.
+Number of inference threads. 0 means all physical cores. Defaults to the
+.B model.n_threads
+configuration value, 0 out of the box. Values above the physical core count
+reduce performance.
 .TP
 .BI \-\-n\-gpu\-layers " " \fIN\fR
 Layers to offload to the GPU. 0 disables offload. Useful values are the total
 layer count or higher.
 .TP
 .BI \-\-context\-size " " \fIN\fR
-Prompt context window in tokens. Range 512 to 32768. Default 4096. Below 2048,
-context and accuracy degrade noticeably.
+Prompt context window in tokens. Range 512 to 32768. Defaults to the
+.B model.context_size
+configuration value, 4096 out of the box. Below 2048, context and accuracy
+degrade noticeably.
 .TP
 .BI \-\-temperature " " \fIF\fR
-Sampling temperature, 0.0 to 2.0. Default 0.2. Use 0.0 for deterministic
-output.
+Sampling temperature, 0.0 to 2.0. Defaults to the
+.B model.temperature
+configuration value, 0.2 out of the box. Use 0.0 for deterministic output.
 .SS Shell integration
 .TP
 .B \-\-init
@@ -171,8 +178,8 @@ to standard output.
 Report the inference backend, thread count, GPU layers, and model details.
 .TP
 .B \-\-bench
-Run the standard benchmark and report p50 and p95 latency, tokens per second, and
-peak memory.
+Run the standard benchmark and report p50 and p95 latency, tokens per second,
+and peak memory.
 .TP
 .BI \-\-log\-level " " \fILEVEL\fR
 One of
@@ -184,8 +191,8 @@ Default
 Additionally write logs to a file.
 .TP
 .B \-\-no\-color
-Disable ANSI colour. Colour is disabled automatically when standard output is not
-a terminal.
+Disable ANSI colour. Colour is disabled automatically when standard output is
+not a terminal.
 .TP
 .B \-\-json
 Emit a single JSON object and nothing else. No prompts, no colour. Intended for
@@ -196,6 +203,20 @@ Print the version, commit hash, and build date.
 .TP
 .BR \-h ", " \-\-help
 Print usage information.
+.SS Not yet implemented
+Not every option below is implemented yet, and the ones that are not are listed
+at the end of this section. They are documented because the interface is settled
+and the man page is meant to be written once. Passing an unimplemented option
+today is an error, not a silent no-op.
+.TP
+.BR \-\-edit ", " \-\-log\-level ", " \-\-log\-file ", " \-\-verbose ", " \-\-quiet ", " \-\-doctor ", " \-\-check ", " \-\-info ", " \-\-bench ", " \-\-strip\-components ", " \-\-generate\-completions
+Diagnostics, editing, and completion generation.
+.TP
+.BR \-\-list\-models ", " \-\-download\-model ", " \-\-update\-model ", " \-\-use\-model ", " \-\-remove
+Model registry management.
+.TP
+.BR \-\-init ", " \-\-remove ", " \-\-uninstall
+Shell hook installation.
 .SH INTERACTIVE PROMPT
 When confirmation is required, the following keys are accepted:
 .TP
@@ -256,7 +277,13 @@ Append-only command history, one JSON object per line, mode 0600. Rotated at
 .I history.jsonl.1
 .TP
 .I ~/.config/gcode/config.toml
-User configuration. Every field is optional.
+User configuration. Every field is optional, and a missing file is not an
+error. An unknown key is refused rather than ignored, so a misspelled setting
+is reported instead of silently doing nothing. Override the location with
+.B GCODE_CONFIG .
+See
+.BR gcode (1)
+"CONFIGURATION" below for the fields and their defaults.
 .TP
 .I ~/.local/share/gcode/models/
 Model cache on Linux.
@@ -266,6 +293,41 @@ Model cache on macOS.
 .TP
 .I /usr/share/gcode/models/
 System-wide model directory, used by distribution packages.
+.SH CONFIGURATION
+The file
+.I ~/.config/gcode/config.toml
+is TOML. Every field is optional and every setting has a default, so an empty
+file is valid.
+.PP
+Values are merged in one order, lowest priority first: built-in default,
+configuration file, environment variable, command-line flag. The defaults live
+in the configuration layer, so a flag never carries a hidden default that would
+outrank the file.
+.PP
+An out-of-range value is refused, and so is one from the file. The file never
+passes through the argument parser, so it needs checking of its own. The error
+names the file, the line, and the field.
+.PP
+.B safety.always_confirm
+may be
+.BR SAFE ,
+.BR LOW ,
+.BR MEDIUM ,
+or
+.BR HIGH .
+It may not be
+.BR CRITICAL :
+a critical command is never run, so that threshold could never be reached by
+anything that prompts, and accepting it would promise more than the tool
+delivers.
+.PP
+.B shell.redact_env
+adds to the built-in redaction patterns and can never remove them. Redaction is
+a guarantee the tool makes, not a preference the user sets. By contrast
+.B safety.blocklist
+is replaced when set, because it is a list of commands the user would rather not
+see. The blocklist is a convenience and not a safety control: the classifier
+decides what is refused to run, and it does not read this list.
 .SH ENVIRONMENT
 .TP
 .B GCODE_MODEL
@@ -351,10 +413,10 @@ may pass through. Command output is truncated to the last 2 kilobytes and at
 most 15 entries are used by default.
 .PP
 Decoding is constrained by a shell grammar, so the model cannot emit a token
-sequence that is not valid shell. This bounds, but does not eliminate, the effect
-of a hostile working directory, filename, or history entry on the generated
-command. Risk classification is independent of the model and re-derived from the
-emitted text, including after editing.
+sequence that is not valid shell. This bounds, but does not eliminate, the
+effect of a hostile working directory, filename, or history entry on the
+generated command. Risk classification is independent of the model and
+re-derived from the emitted text, including after editing.
 .SH SEE ALSO
 .BR bash (1),
 .BR zsh (1),

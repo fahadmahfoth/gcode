@@ -76,8 +76,21 @@ dirs = "5"
 # MSRV audit in docs/TESTING.md is not optional.
 clap = { version = "4.5", features = ["derive"] }
 
+# Reading the config file (Phase 1.2). toml with the parse feature, and serde for
+# the derive. Both are pure: no I/O beyond reading a file, no network, no
+# process execution, so neither can be the thing that reaches out. The config
+# layer derives Deserialize rather than parsing by hand, because a hand-written
+# parser is where "unknown key silently ignored" comes from.
+toml = { version = "0.8", features = ["parse"] }
+serde = { version = "1.0.229", features = ["derive"] }
+
 # No [dev-dependencies] yet. Every task that adds a test adds the fixtures it
 # needs in the same change. Tests use FakeEngine, never a real model.
+#
+# The config tests wanted a temporary directory and did not get `tempfile`,
+# because its current line pulls in a `getrandom` that requires Rust 1.85 and
+# would break the MSRV audit. tests/api.rs makes its own directory instead; that
+# is a cheaper trade than pinning a crate to satisfy one helper.
 
 # Lint levels. These live here rather than in .clippy.toml because .clippy.toml
 # accepts only clippy's own configuration keys, not lint names — a `pedantic`

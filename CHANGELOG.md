@@ -16,6 +16,20 @@ This rule is what keeps the documentation honest — see
 
 ### Added
 
+- `src/config.rs` (Phase 1.2): the configuration layer. A `Config` whose every
+  field is optional, a four-source merge (default → file → environment → flag)
+  in one function, and an `EffectiveConfig` with no optional fields left.
+  `Config::load` treats a missing file as normal and a malformed one as an error
+  naming the file, the line, and the field. `resolve` validates the merged
+  value, so a file that never passed through the argument parser is still range
+  checked.
+- `always_confirm` may be set to `SAFE`, `LOW`, `MEDIUM`, or `HIGH`. `CRITICAL`
+  is refused: a critical command is never run, so that threshold could never be
+  reached by anything that prompts.
+- `RiskLevel` in the library, ordered so that the threshold comparison is a
+  `>=` rather than a hand-written match.
+- A `CONFIGURATION` section in the man page, and a defaults table in
+  `docs/USAGE.md` with the bound on every setting.
 - Complete documentation set: install, usage, architecture, safety, models,
   testing, troubleshooting, contributing, releasing, decisions, and a man page
 - 16 architecture decision records under `docs/adr/`
@@ -38,6 +52,32 @@ This rule is what keeps the documentation honest — see
 - `rust-toolchain.toml` pinning the stable channel plus `rustfmt` and `clippy`.
   The patch version is deliberately not pinned; the reason is in
   [docs/ROADMAP.md § Note on task 0.2](docs/ROADMAP.md#note-on-task-02).
+
+### Changed
+
+- The numeric defaults moved out of `clap` and into `config::defaults`.
+  `--temperature` with no argument is now "not specified" rather than 0.2, which
+  is what makes "the flag beats the file" true: a flag carrying a hidden default
+  outranks every source below it. Range checks are unchanged and still apply to
+  a value the user typed.
+- Unknown config keys are refused rather than ignored. A misspelled setting that
+  is silently dropped is a config that appears to do nothing.
+- `shell.redact_env` extends the built-in redaction patterns and can never
+  replace them, per ADR 0006. `safety.blocklist` still replaces, because it is
+  the user's list of commands they would rather not see.
+- Dependencies added: `toml` 0.8 and `serde` 1.0 with `derive`. `indexmap` is
+  pinned to 2.11.4 in the lockfile because 2.12+ requires Rust 1.82, above the
+  1.75 floor in ADR 0002.
+
+### Fixed
+
+- `--no-git` and `--no-env` were documented in `docs/USAGE.md` and absent from
+  the parser. Both are implemented, and both map to `context.include_git` and
+  `context.include_env`.
+- `docs/gcode.1` no longer claims a fixed default for `--context`,
+  `--n-threads`, `--context-size`, and `--temperature`. Those now depend on the
+  config file, and the man page says so.
+- Three over-long lines in `docs/gcode.1`, flagged by `mandoc -T lint`.
 - `src/lib.rs` and `src/main.rs`. The binary accepts `--version`/`-V` and
   refuses everything else with a non-zero exit, including a bare `gcode`, so an
   unimplemented mode cannot look like a successful run.

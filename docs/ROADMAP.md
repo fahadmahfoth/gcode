@@ -228,12 +228,21 @@ space-separated and the `=`-separated form.
 
 ### 1.2 Config layer — `src/config.rs`
 
-- [ ] `Config` struct, every field `Option<T>` (defaults live in one place)
-- [ ] Load order: defaults → config file → env vars → CLI flags
-- [ ] Missing file is not an error; malformed file is an error naming the path
-- [ ] `Config::resolve()` returns a fully-defaulted `EffectiveConfig`
-- [ ] **Test:** a fixture config file with one bad field reports that field
-- [ ] **Test:** env var `GCODE_MODEL` beats the file, CLI beats both
+- [x] `Config` struct, every field `Option<T>` (defaults live in one place)
+- [x] Load order: defaults → config file → env vars → CLI flags
+- [x] Missing file is not an error; malformed file is an error naming the path
+- [x] `Config::resolve()` returns a fully-defaulted `EffectiveConfig`
+- [x] **Test:** a fixture config file with one bad field reports that field
+- [x] **Test:** env var `GCODE_MODEL` beats the file, CLI beats both
+
+Beyond the listed tasks, this slice also had to:
+
+- move the numeric defaults out of `clap` and into `config::defaults`, because
+  a flag carrying `default_value_t` cannot be distinguished from a flag the user
+  typed, so "CLI beats the file" was untrue for every numeric setting
+- add `--no-git` and `--no-env`, which USAGE.md documented and Phase 1.1 omitted
+- refuse unknown config keys, on the grounds that a silently ignored setting is
+  worse than a rejected one
 
 ### 1.3 Model registry — `src/model/registry.rs`, `models/registry.toml`
 

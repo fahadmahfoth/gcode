@@ -8,11 +8,11 @@
 //! - The binary: `anyhow` context. A CLI adds "what I was trying to do" on the
 //!   way out and never exposes the context type in an API.
 //!
-//! A variant exists only when some code path constructs it. Phase 0 does
-//! filesystem-independent work, so there is no `Io` variant yet: it arrives
-//! with the model downloader in Phase 1.3 and the history store in Phase 2.1.
-//! An error variant with no constructor is a lie about the interface, and it
-//! forces every caller to write a dead match arm.
+//! A variant exists only when some code path constructs it. The config layer
+//! adds the three TOML variants; the model downloader and the history store
+//! each add their own when they arrive in Phase 1.4 and 2.1. An error variant
+//! with no constructor is a lie about the interface, and it forces every caller
+//! to write a dead match arm.
 
 /// Result alias for library operations.
 ///
@@ -38,4 +38,48 @@ pub enum Error {
         /// The name of the offending variable.
         variable: &'static str,
     },
+
+    /// The config file could not be read.
+    #[error("could not read the config file at {}", path.display())]
+    ConfigRead {
+        /// Where the file is.
+        path: std::path::PathBuf,
+        /// What the operating system reported.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The config file is not valid, or holds an unknown key.
+    ///
+    /// The message names the offending key. A user who mistyped one field needs
+    /// to be told which one, because "invalid config" sends them looking through
+    /// the whole file.
+    #[error("invalid config at {}: {message}", path.display())]
+    ConfigParse {
+        /// Where the file is.
+        path: std::path::PathBuf,
+        /// The parser's message, which names the key.
+        message: String,
+    },
+
+    /// A resolved value is outside the range the tool can work with.
+    #[error("config field {field} {requirement}")]
+    InvalidConfig {
+        /// The dotted path of the offending field, e.g. `model.temperature`.
+        field: String,
+        /// The accepted range, in words.
+        requirement: String,
+    },
+
+    /// `always_confirm` was set to `CRITICAL`.
+    ///
+    /// Its own variant rather than a field range, because the reason is not
+    /// that the value is out of range. It is that a threshold of CRITICAL can
+    /// never be reached by a command that runs, so accepting it would tell the
+    /// user they had configured something the tool cannot deliver.
+    #[error(
+        "safety.always_confirm cannot be CRITICAL: critical commands are never run, \
+         so that threshold can never be met; use HIGH or below"
+    )]
+    InvalidAlwaysConfirm,
 }

@@ -8,7 +8,7 @@
 phase: 1
 phase_name: Core inference pipeline
 phase_status: in_progress
-first_incomplete_task: 1.2
+first_incomplete_task: 1.3
 
 # Phases, in order. `next` is the only actionable one.
 phases:
@@ -76,17 +76,17 @@ needs_human_later:
 # Verified present. See `last_verified` for what was actually run against it.
 toolchain_present: true
 
-# Compiled, and `--locked` clean. The three declared dependencies are the only
-# ones the Phase 0 modules use; `inference` and `download` stay empty until
-# Phase 1 resolves their versions.
+# Compiled, and `--locked` clean. Five dependencies are declared: thiserror,
+# anyhow, dirs, clap, and toml with serde for the config layer. `inference` and
+# `download` stay empty until Phase 1.4 resolves their versions.
 manifest_written: true
 manifest_compiled: true
 platforms_verified:
   - macOS aarch64 (rustc 1.98.1)
 platforms_unverified:
   - Linux x86_64
-last_verified: "macOS aarch64, rustc 1.98.1, after 1.1: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 61 passed / 0 failed (54 lib + 2 bin + 5 integration); `cargo build --release --locked` passed; MSRV audit over `cargo metadata --locked` confirms all 43 locked packages declare rust-version <= 1.75; exit codes confirmed by running the release binary: --version and --help exit 0, usage errors exit 2, parsed-but-unimplemented modes exit 1"
-last_command: "cargo test, cargo clippy --all-targets --all-features -- -D warnings, then a scripted exit-code matrix over target/release/gcode"
+last_verified: "macOS aarch64, rustc 1.98.1, after 1.2: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 103 passed / 0 failed (87 lib + 2 bin + 14 integration); `cargo build --release --locked` passed; MSRV audit over `cargo metadata --format-version 1 --locked` confirms all 57 locked packages declare rust-version <= 1.75; exit codes confirmed by running the release binary: --version and --help exit 0, unknown flag and out-of-range --temperature exit 2, parsed-but-unimplemented mode exits 1; every flag in `--help` appears in `docs/gcode.1`, and the man page now lists its unimplemented options under a Not-yet-implemented heading; `mandoc -T lint docs/gcode.1` clean"
+last_command: "cargo fmt --all -- --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test, cargo build --release --locked, the MSRV audit over cargo metadata, a scripted exit-code matrix over target/release/gcode, and mandoc -T lint docs/gcode.1"
 ```
 
 ### Known open items, not yet recorded above
@@ -103,8 +103,17 @@ last_command: "cargo test, cargo clippy --all-targets --all-features -- -D warni
 - `docs/CONTRIBUTING.md` says pull requests target `main`. There is no `main`
   branch and the default is `master`. The CI push trigger was corrected to
   `master`; the prose in CONTRIBUTING is still wrong.
-- Disk was at ~270 MiB free against a 100%-full volume. Phase 1.5 needs
-  `llama-cpp-rs`, which builds C++ and will fail partway through on a full disk.
+- Disk is tight again: 645 MiB free on a 95%-full volume after the 1.2 release
+  build. Phase 1.4 needs `llama-cpp-rs`, which builds C++ and will fail partway
+  through on a full disk. `cargo clean` between phases, or a larger volume, is
+  the cheapest thing the human can do before then.
+- `Cargo.toml` requires `clap = "4.5"`, which is a caret requirement: a fresh
+  `cargo update` may resolve 4.6, whose `rust-version` is 1.85. The lockfile
+  currently pins 4.5.61, and the MSRV audit above passes because of the lockfile
+  rather than because of the requirement. The manifest comment says this; the
+  requirement does not enforce it.
+- `Cargo.lock` pins `indexmap` to 2.11.4 because 2.12+ needs Rust 1.82. A
+  `cargo update` will undo that too. Same caveat as the one above.
 
 ---
 

@@ -275,9 +275,68 @@ animation = false
 
 Precedence: CLI flag > environment variable > config file > built-in default.
 
+A missing config file is not an error; gcode has to work on a fresh machine. A
+malformed one is an error, and it names the file, the line, and the field:
+
+```
+invalid config at /home/user/.config/gcode/config.toml: line 12, model.context_size: invalid type: string "four thousand", expected u32
+```
+
+Unknown keys are refused rather than ignored. A misspelled key that is
+silently dropped is a config that appears to do nothing, which is the failure
+this strictness exists to prevent.
+
 Environment variables: `GCODE_MODEL`, `GCODE_MODEL_MIRROR`, `GCODE_NO_HISTORY`,
 `GCODE_NO_INIT`, `GCODE_NO_MODEL`, `GCODE_CONFIG`, `GCODE_LOG_LEVEL`,
 `GCODE_HISTORY_FILE`, `RUST_LOG`.
+
+### Defaults
+
+The defaults live in one place, the config layer, so that a flag cannot quietly
+outrank the file by carrying a hidden default of its own. That is why
+`--temperature` with no argument is "not specified" rather than 0.2.
+
+| Field | Default | Bound |
+|---|---|---|
+| `model.n_threads` | 0 (all cores) | — |
+| `model.n_gpu_layers` | 0 | — |
+| `model.context_size` | 4096 | 512–32768 |
+| `model.temperature` | 0.2 | 0.0–2.0 |
+| `model.top_p` | 0.9 | 0.0–1.0 |
+| `model.max_tokens` | 256 | 1–8192 |
+| `context.history_entries` | 15 | 0–1000 |
+| `context.output_tail_bytes` | 2048 | 1–1048576 |
+| `context.include_git` | true | — |
+| `context.include_env` | true | — |
+| `context.include_cwd` | true | — |
+| `safety.always_confirm` | MEDIUM | SAFE–HIGH |
+| `safety.explain` | true | — |
+| `shell.hook` | true | — |
+| `shell.capture_output` | true | — |
+| `ui.color` | true | — |
+| `ui.emoji` | true | — |
+| `ui.animation` | false | — |
+
+Bounds apply to the value that survives the merge, so a config file is checked
+even though it never passes through the argument parser.
+
+### What `always_confirm` may be set to
+
+`SAFE`, `LOW`, `MEDIUM`, or `HIGH`. `CRITICAL` is refused, and not as a
+formality: a critical command is never run at all, so a threshold of `CRITICAL`
+could never be reached by anything that prompts. Accepting it would tell you
+that you had configured something stricter than the tool can deliver.
+
+### `redact_env` extends, `blocklist` replaces
+
+They behave differently on purpose. `redact_env` adds to the built-in patterns
+and can never remove them, because redaction is a guarantee the tool makes
+(ADR 0006) rather than a preference the user has. `blocklist` is your list of
+commands you would rather not see, so setting a shorter one is a real choice.
+
+The blocklist is a convenience, not a safety control. The classifier decides
+what is refused to run, and it does not read this list. Clearing the blocklist
+does not make a dangerous command safe.
 
 ---
 

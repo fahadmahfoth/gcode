@@ -76,12 +76,20 @@ pub struct Cli {
     pub dry_run: bool,
 
     /// Number of recent history entries to read as context.
-    #[arg(long, value_name = "N", default_value_t = 15)]
-    pub context: usize,
+    #[arg(long, value_name = "N")]
+    pub context: Option<usize>,
 
     /// Ignore history entirely.
     #[arg(long)]
     pub no_history: bool,
+
+    /// Leave git status out of the context.
+    #[arg(long)]
+    pub no_git: bool,
+
+    /// Leave the environment out of the context.
+    #[arg(long)]
+    pub no_env: bool,
 
     /// Build context as if running in this directory.
     #[arg(long = "in", value_name = "DIR")]
@@ -92,29 +100,24 @@ pub struct Cli {
     pub model: Option<String>,
 
     /// Inference thread count. 0 uses all cores.
-    #[arg(long, value_name = "N", default_value_t = 0)]
-    pub n_threads: usize,
+    #[arg(long, value_name = "N")]
+    pub n_threads: Option<usize>,
 
     /// Layers to offload to the GPU.
-    #[arg(long, value_name = "N", default_value_t = 0)]
-    pub n_gpu_layers: i32,
+    #[arg(long, value_name = "N")]
+    pub n_gpu_layers: Option<i32>,
 
     /// Prompt context window, in tokens.
-    #[arg(long, value_name = "N", default_value_t = 4096)]
-    pub context_size: u32,
+    #[arg(long, value_name = "N")]
+    pub context_size: Option<u32>,
 
     /// Sampling temperature. Keep it low for commands.
     // `allow_hyphen_values` because the valid range starts at 0.0 and a user
     // who types `--temperature -0.1` should be told the value is out of range,
     // not that clap found an unexpected argument called `-0`. Without this the
     // range check below is unreachable for the one input that most needs it.
-    #[arg(
-        long,
-        value_name = "F",
-        default_value_t = 0.2,
-        allow_hyphen_values = true
-    )]
-    pub temperature: f32,
+    #[arg(long, value_name = "F", allow_hyphen_values = true)]
+    pub temperature: Option<f32>,
 
     /// Machine-readable output. No prompts, no colour.
     #[arg(long)]
@@ -199,18 +202,26 @@ pub struct Parsed {
     pub dry_run: bool,
     /// Whether to ignore history.
     pub no_history: bool,
-    /// How many history entries to read as context.
-    pub context_entries: usize,
+    /// Whether to leave git status out of the context.
+    pub no_git: bool,
+    /// Whether to leave the environment out of the context.
+    pub no_env: bool,
+    /// How many history entries to read as context, if the flag was given.
+    ///
+    /// `None` means the flag was absent, which is not the same as `Some(15)`:
+    /// the config file and the environment may have set a different value. The
+    /// default lives in `config::defaults`, in one place.
+    pub context_entries: Option<usize>,
     /// Model name or path, if the user named one.
     pub model: Option<String>,
-    /// Thread count. 0 means all cores.
-    pub n_threads: usize,
-    /// Layers to offload to the GPU.
-    pub n_gpu_layers: i32,
-    /// Prompt context window, in tokens.
-    pub context_size: u32,
-    /// Sampling temperature.
-    pub temperature: f32,
+    /// Thread count, if the flag was given. 0 means all cores.
+    pub n_threads: Option<usize>,
+    /// Layers to offload to the GPU, if the flag was given.
+    pub n_gpu_layers: Option<i32>,
+    /// Prompt context window in tokens, if the flag was given.
+    pub context_size: Option<u32>,
+    /// Sampling temperature, if the flag was given.
+    pub temperature: Option<f32>,
     /// Whether to emit JSON.
     pub json: bool,
     /// Whether to disable colour.
@@ -233,28 +244,32 @@ impl Cli {
     /// selected, or a numeric value falls outside its documented range.
     pub fn parse(self) -> Result<Parsed, String> {
         let mode = self.resolve_mode()?;
-        let context_entries = self.context;
-        if context_entries > MAX_CONTEXT_ENTRIES {
-            return Err(format!(
-                "--context is {context_entries}, but the maximum is {MAX_CONTEXT_ENTRIES}; \
-                 a smaller number is also faster, because every entry becomes tokens"
-            ));
+        if let Some(context_entries) = self.context {
+            if context_entries > MAX_CONTEXT_ENTRIES {
+                return Err(format!(
+                    "--context is {context_entries}, but the maximum is {MAX_CONTEXT_ENTRIES}; \
+                     a smaller number is also faster, because every entry becomes tokens"
+                ));
+            }
         }
 
-        if !(MIN_TEMPERATURE..=MAX_TEMPERATURE).contains(&self.temperature) {
-            return Err(format!(
-                "--temperature is {}, but it must be between {MIN_TEMPERATURE} and {MAX_TEMPERATURE}; \
-                 values above 1 produce a command you did not ask for",
-                self.temperature
-            ));
+        if let Some(temperature) = self.temperature {
+            if !(MIN_TEMPERATURE..=MAX_TEMPERATURE).contains(&temperature) {
+                return Err(format!(
+                    "--temperature is {temperature}, but it must be between {MIN_TEMPERATURE} and \
+                     {MAX_TEMPERATURE}; values above 1 produce a command you did not ask for"
+                ));
+            }
         }
 
-        if !(MIN_CONTEXT_SIZE..=MAX_CONTEXT_SIZE).contains(&self.context_size) {
-            return Err(format!(
-                "--context-size is {}, but it must be between {MIN_CONTEXT_SIZE} and {MAX_CONTEXT_SIZE} \
-                 tokens; a window too small for the prompt is not an error the model can report",
-                self.context_size
-            ));
+        if let Some(context_size) = self.context_size {
+            if !(MIN_CONTEXT_SIZE..=MAX_CONTEXT_SIZE).contains(&context_size) {
+                return Err(format!(
+                    "--context-size is {context_size}, but it must be between {MIN_CONTEXT_SIZE} \
+                     and {MAX_CONTEXT_SIZE} tokens; a window too small for the prompt is not an \
+                     error the model can report"
+                ));
+            }
         }
 
         Ok(Parsed {
@@ -265,7 +280,9 @@ impl Cli {
             yes: self.yes,
             dry_run: self.dry_run || self.no,
             no_history: self.no_history,
-            context_entries,
+            no_git: self.no_git,
+            no_env: self.no_env,
+            context_entries: self.context,
             model: self.model,
             n_threads: self.n_threads,
             n_gpu_layers: self.n_gpu_layers,
@@ -522,8 +539,11 @@ mod tests {
     }
 
     #[test]
-    fn context_defaults_to_fifteen() {
-        assert_eq!(parse(&["gcode", "-c", "x"]).unwrap().context_entries, 15);
+    fn an_absent_numeric_flag_stays_absent() {
+        // Absent, not 15. The default lives in `config::defaults` so that the
+        // config file and the environment are not silently overruled by a
+        // default the user cannot see.
+        assert_eq!(parse(&["gcode", "-c", "x"]).unwrap().context_entries, None);
     }
 
     #[test]
@@ -560,7 +580,7 @@ mod tests {
     #[test]
     fn context_at_the_maximum_is_accepted() {
         let parsed = parse(&["gcode", "-c", "x", "--context", "1000"]).unwrap();
-        assert_eq!(parsed.context_entries, 1000);
+        assert_eq!(parsed.context_entries, Some(1000));
     }
 
     #[test]
@@ -659,10 +679,11 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(parsed.model.as_deref(), Some("kitty-bash-llm"));
-        assert_eq!(parsed.n_threads, 4);
-        assert_eq!(parsed.n_gpu_layers, 12);
-        assert_eq!(parsed.context_size, 8192);
-        assert!((parsed.temperature - 0.1).abs() < f32::EPSILON);
+        assert_eq!(parsed.n_threads, Some(4));
+        assert_eq!(parsed.n_gpu_layers, Some(12));
+        assert_eq!(parsed.context_size, Some(8192));
+        let temperature = parsed.temperature.expect("flag was given");
+        assert!((temperature - 0.1).abs() < f32::EPSILON);
     }
 
     #[test]

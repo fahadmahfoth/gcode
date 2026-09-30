@@ -86,6 +86,7 @@ mod tests {
 | File | Covers |
 |---|---|
 | `tests/cli.rs` | End-to-end flag handling via `assert_cmd` |
+| `tests/api.rs` | The public surface from outside the crate, including the whole config precedence chain |
 | `tests/safety.rs` | The full pattern table, one test per row |
 | `tests/history.rs` | Corruption, rotation, torn lines, permissions |
 | `tests/pipeline.rs` | The whole flow against `FakeEngine` |
@@ -169,6 +170,21 @@ The highest-value tests in the project. Every row must have a case.
 | Taint | `cp x /etc/y && rm /etc/y` → escalated | `cp x /tmp/y` |
 | Edit laundering | `e` turning HIGH into CRITICAL → re-blocked | — |
 | Non-interactive | piped stdin → no execution | — |
+
+### Config rows
+
+Not classifier rows, but the same discipline applies: each of these has a case
+that must pass and a near miss that must not.
+
+| Property | Must | Must not |
+|---|---|---|
+| Malformed field | the message names the field, e.g. `model.context_size` | a message saying only "invalid config" |
+| Unknown key | refused | silently ignored |
+| Missing file | `Ok(None)` | an error |
+| Precedence | flag beats env beats file beats default | a flag's hidden default outranking the file |
+| `always_confirm` | `SAFE`..`HIGH` accepted | `CRITICAL` accepted |
+| `redact_env` | built-in patterns always present | built-ins removable by config |
+| Range check | a file-only value checked, with its range named | an unchecked file value |
 
 That last column is the one teams skip and the one that bites. A regex that is
 too broad destroys trust in the tool; users start pressing `y` reflexively, and
