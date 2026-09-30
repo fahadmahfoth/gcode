@@ -1,0 +1,44 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md"],
+  "share": "disabled",
+  "autoupdate": "notify",
+  "snapshot": true,
+  "logLevel": "INFO",
+  "formatter": false,
+  "compaction": {
+    "auto": true,
+    "tail_turns": 15
+  },
+  "permission": {
+    "external_directory": {
+      "*": "deny"
+    },
+    "bash": {
+      "git commit*": "ask",
+      "git push*": "ask",
+      "git reset --hard*": "ask",
+      "git clean -fd*": "ask",
+      "git rebase*": "ask",
+      "cargo publish*": "ask",
+      "gh release*": "ask",
+      "npm publish*": "ask",
+      "*": "allow"
+    }
+  },
+  "agent": {
+    "gcode-safety-auditor": {
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny",
+        "bash": { "*": "deny" }
+      }
+    },
+    "gcode-reviewer": {
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny"
+      }
+    }
+  }
+}

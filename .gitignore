@@ -1,0 +1,86 @@
+# ── Rust ────────────────────────────────────────────────────────────────
+/target
+**/*.rs.bk
+*.pdb
+
+# ── Local config & secrets ───────────────────────────────────────────────
+# Never commit real credentials. .env.example holds names only.
+/.env
+.env.*
+!.env.example
+*.pem
+*.key
+!docs/**/*.pub.pem
+secrets/
+.gcode/
+
+# ── Model files ──────────────────────────────────────────────────────────
+# Hundreds of megabytes, and their checksums live in models/registry.toml
+*.gguf
+*.bin
+models/*.gguf
+models/*.bin
+models/local/
+
+# ── Shell history gcode writes ───────────────────────────────────────────
+# This is the user's real command history. It must never be in the repository.
+history.jsonl
+history.jsonl.*
+
+# ── Build output ─────────────────────────────────────────────────────────
+dist/
+build/
+*.deb
+*.rpm
+*.AppImage
+*.apk
+target-dist/
+
+# ── Editors & OS ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.AppleDouble
+.LSOverride
+.Trashes
+desktop.ini
+
+# ── Coverage & profiling ────────────────────────────────────────────────
+*.profraw
+*.profdata
+coverage/
+lcov.info
+tarpaulin-report.html
+
+# ── Logs ─────────────────────────────────────────────────────────────────
+*.log
+gcode.log
+
+# ── Signing material ─────────────────────────────────────────────────────
+# The signing key is the maintainer's, and lives only in their custody.
+*.gpg
+*.gpg.key
+*.asc
+*.sig
+!*.sig.pub
+keyring/
+*.kdbx
+
+# ── Temp & caches ────────────────────────────────────────────────────────
+.cache/
+tmp/
+.cache-opencode/
+node_modules/
+.opencode/cache/
+
+# ── Docs build artifacts (sources are tracked) ───────────────────────────
+docs/_build/
+docs/site/
+
+# ── Local agent scratch ──────────────────────────────────────────────────
+.opencode/*.log
+.opencode/session/
+.opencode/tmp/

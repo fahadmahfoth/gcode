@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/fahadmf/gcode/security/advisories/new
+    about: Report privately. Do not open a public issue.
+  - name: Question or idea
+    url: https://github.com/fahadmf/gcode/discussions
+    about: Ask a question or propose a feature.
+
+# See SECURITY.md and docs/RELEASING.md.

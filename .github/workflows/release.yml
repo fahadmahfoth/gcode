@@ -1,0 +1,238 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify without publishing"
+        type: boolean
+        default: true
+
+# See docs/RELEASING.md and docs/adr/0016-keyless-signing.md.
+#
+# The publish step requires a maintainer to dispatch it. This workflow prepares
+# and verifies everything; it never publishes on its own.
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: pre-release gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: format
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: test
+        run: cargo test --all-features --locked
+      - name: safety suite
+        run: cargo test --test safety --locked
+      - name: audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+      - name: deny
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check all
+      - name: secret scan
+        run: |
+          if grep -rInE '(api[_-]?key|secret|token|password|BEGIN [A-Z ]*PRIVATE KEY)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}' \
+               --exclude-dir=target --exclude-dir=.git . ; then
+            echo "::error::credential-shaped string found; refusing to release"
+            exit 1
+          fi
+          echo "ok"
+
+  build:
+    name: build artefacts
+    needs: [verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-dist
+
+      - name: build
+        run: cargo dist build --output-format=tar.gz --locked
+
+      - name: checksums are present and complete
+        run: |
+          test -f dist-artifacts/checksums.txt || { echo "::error::no checksums"; exit 1; }
+          echo "artefacts:"
+          ls -lh dist-artifacts/
+
+      - name: upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-artifacts
+          path: dist-artifacts/
+
+  sign:
+    name: sign with keyless OIDC
+    needs: [build]
+    runs-on: ubuntu-latest
+    # ADR 0016: keyless signing. No long-lived signing secret exists, and this
+    # workflow must never introduce one.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-artifacts
+
+      - name: install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: sign every artefact
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          set -euo pipefail
+          SIGNED=0
+          for f in dist-artifacts/*; do
+            case "$f" in
+              *.tar.gz|*.zip|*.AppImage)
+                cosign sign-blob "$f" \
+                  --yes \
+                  --output-signature "${f}.sig" \
+                  --output-certificate "${f}.pem"
+                SIGNED=$((SIGNED + 1))
+                ;;
+            esac
+          done
+          if [ "$SIGNED" -eq 0 ]; then
+            echo "::error::no distributable artefact was produced, so nothing was signed"
+            exit 1
+          fi
+          echo "signed $SIGNED artefact(s) with keyless Sigstore OIDC"
+
+      - name: attest provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: dist-artifacts/*
+
+      - name: upload signed artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-artifacts
+          path: dist-artifacts/
+
+  verify-release:
+    name: verify on a clean machine
+    needs: [sign]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-artifacts
+
+      - name: signature verifies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for f in dist-artifacts/*.tar.gz; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"
+          done
+
+      - name: install and smoke test
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/gcode-extract && mkdir -p /tmp/gcode-extract
+          TARBALL=$(ls dist-artifacts/*x86_64-unknown-linux-musl.tar.gz)
+          tar -xzf "$TARBALL" -C /tmp/gcode-extract
+          install -m755 /tmp/gcode-extract/*/gcode /usr/local/bin/gcode
+          gcode --version
+          gcode --help > /dev/null
+          echo "smoke test complete"
+
+      - name: doctor on a clean machine
+        continue-on-error: true
+        run: |
+          # Informational. A clean machine has no model installed, so doctor is
+          # expected to report that. The binary starting at all is what the
+          # smoke test above already proved.
+          gcode doctor || echo "::warning::doctor exited non-zero with no model installed, which is expected on a clean machine"
+
+  # ── Publication. Requires a maintainer. ─────────────────────────────────
+  publish:
+    name: publish release
+    # Publication is a maintainer decision (AGENTS.md section 6). A tag push
+    # only builds and verifies. To publish, a human dispatches this workflow
+    # again on the tag with dry_run=false, and GitHub shows them the run first.
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run == false
+    needs: [verify-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-artifacts
+
+      - name: create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES=$(awk "/^## \[${TAG#v}\]/{found=1; next} /^## \[/{found=0} found" CHANGELOG.md)
+          gh release create "$TAG" dist-artifacts/* \
+            --title "gcode $TAG" \
+            --notes "$NOTES"
+
+      - name: build and push the container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:latest
+
+  # ── Downstream packaging. PRs are opened; a maintainer merges them. ──────
+  package-prs:
+    name: open packaging pull requests
+    # Opening a PR in another repository is publishing to the outside world, so
+    # it is gated behind the same explicit human dispatch as the release.
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run == false
+    needs: [verify-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: note the manual steps
+        run: |
+          {
+            echo "### Packaging follow-up for ${{ github.ref_name }}"
+            echo
+            echo "- [ ] Merge the Homebrew formula PR"
+            echo "- [ ] Merge the AUR PR"
+            echo "- [ ] Publish the APT repository (maintainer GPG key)"
+            echo "- [ ] Publish to COPR"
+            echo
+            echo "These require maintainer accounts. See docs/RELEASING.md."
+          } > release-notes-pending.md
+
+          gh pr create \
+            --title "Release ${{ github.ref_name }} — packaging checklist" \
+            --body-file release-notes-pending.md \
+            || echo "could not open the packaging PR; do it manually"
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,257 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+# See AGENTS.md and docs/RELEASING.md.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── Fast gate. Runs on every push and PR. Must stay under five minutes. ────
+  lint:
+    name: format, lint, and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: format
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: test
+        run: cargo test --all-features --locked
+
+      - name: build
+        run: cargo build --release --locked
+
+  # ── The safety gate. The classifier is the product's core promise. ────────
+  safety:
+    name: safety suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: classifier suite
+        run: cargo test --test safety --locked
+
+      - name: classifier coverage must be 100%
+        run: |
+          cargo install cargo-llvm-cov --locked
+          cargo llvm-cov --test safety --fail-under-lines 100
+
+      - name: no model dependency in src/safety
+        # ADR 0004: the classifier must stay a pure function.
+        run: |
+          if grep -rInE 'llama|inference|engine::|crate::inference' src/safety/ ; then
+            echo "::error::src/safety/ must not depend on inference"
+            exit 1
+          fi
+          echo "ok: src/safety/ is pure"
+
+      - name: no plugin system before v1.0
+        # ADR 0011: the plugin deferral must not erode quietly.
+        run: |
+          if grep -rInE 'wasm|dylib|dlopen|Lua|plugin_api' src/ ; then
+            echo "::error::plugin infrastructure appeared before v1.0"
+            exit 1
+          fi
+          echo "ok: no plugin infrastructure"
+
+  # ── Network containment. ADR 0001: offline after the model download. ──────
+  offline:
+    name: works with no network
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+
+      - name: the only network code is the model downloader
+        run: |
+          echo "Allowed network modules:"
+          grep -rlE 'reqwest|ureq|hyper::client|TcpStream' src/ || echo "  (none)"
+          ALLOWED='src/model/download.rs'
+          FOUND=$(grep -rlE 'reqwest|ureq|hyper::client|TcpStream' src/ | grep -v "^${ALLOWED}$" || true)
+          if [ -n "$FOUND" ]; then
+            echo "::error::network code outside ${ALLOWED}:"
+            echo "$FOUND"
+            exit 1
+          fi
+          echo "ok: network access is confined to the model downloader"
+
+      - name: run the suite with networking disabled
+        run: |
+          # Guards against a regression that reintroduces a network call on a
+          # code path the local-first promise forbids (ADR 0001). The only
+          # permitted network code is the model downloader, whose integration
+          # test legitimately needs the network and is named download_integration.
+          # A real test failure here must fail the job: swallowing it would make
+          # this gate worse than useless.
+          restore() { sudo iptables -P OUTPUT ACCEPT; }
+          trap restore EXIT
+          sudo iptables -P OUTPUT DROP
+          cargo test --locked -- --skip download_integration
+
+  # ── Secrets. This repository is public. This job is not advisory. ─────────
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: credential-shaped assignments
+        run: |
+          if grep -rInE '(api[_-]?key|secret|token|password|BEGIN [A-Z ]*PRIVATE KEY)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}' \
+               --exclude-dir=target --exclude-dir=.git . ; then
+            echo "::error::credential-shaped string found. Report it; do not fix silently."
+            exit 1
+          fi
+          echo "ok: no credential-shaped assignments"
+
+      - name: private key material
+        run: |
+          if git ls-files | grep -E '\.(pem|key|asc|gpg|p12|pfx)$' ; then
+            echo "::error::key material is tracked"
+            exit 1
+          fi
+          echo "ok: no key material tracked"
+
+      - name: model files are never committed
+        run: |
+          if git ls-files | grep -E '\.(gguf|bin)$' ; then
+            echo "::error::a model file is tracked"
+            exit 1
+          fi
+          echo "ok: no model files tracked"
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Supply chain. ADR 0009. ──────────────────────────────────────────────
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+      - name: deny (licence and advisory policy)
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check all
+
+      - name: dependency review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  # ── Build matrix. ────────────────────────────────────────────────────────
+  build:
+    name: build ${{ matrix.os }} ${{ matrix.arch }}
+    needs: [lint]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+            runner: ubuntu-latest
+          - os: ubuntu-22.04
+            arch: x86_64
+            runner: ubuntu-22.04
+          - os: macos-14
+            arch: aarch64
+            runner: macos-14
+          - os: macos-13
+            arch: x86_64
+            runner: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: the binary runs
+        run: ./target/release/gcode --version
+
+  # ── Documentation honesty. Rule 0.4. ────────────────────────────────────
+  docs:
+    name: documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: internal links resolve
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          broken = 0
+          for root, dirs, files in os.walk('.'):
+              dirs[:] = [d for d in dirs if d not in ('.git', 'target', 'node_modules')]
+              for fn in files:
+                  if not fn.endswith('.md'):
+                      continue
+                  p = os.path.join(root, fn)
+                  # Strip fenced code blocks: their contents are examples, not links.
+                  lines, fenced, buf = open(p, encoding='utf-8').read().split('\n'), False, []
+                  for line in lines:
+                      if line.strip().startswith('```'):
+                          fenced = not fenced
+                          continue
+                      if not fenced:
+                          buf.append(line)
+                  src = '\n'.join(buf)
+                  for m in re.finditer(r'\]\(([^)#][^)]*)\)', src):
+                      link = m.group(1)
+                      if link.startswith(('http', 'mailto:')):
+                          continue
+                      tgt = os.path.normpath(os.path.join(root, link.split('#')[0]))
+                      if not os.path.exists(tgt):
+                          print(f'::error::{p} links to a missing file: {link}')
+                          broken += 1
+          sys.exit(1 if broken else 0)
+          PY
+          echo "ok: links checked"
+
+      - name: every flag is documented
+        run: |
+          cargo build --release --locked
+          ./target/release/gcode --help > /tmp/help.txt
+          MISSING=0
+          for flag in $(grep -oE '^\s+(-[a-zA-Z], )?--[a-z-]+' /tmp/help.txt | grep -oE '\-\-[a-z-]+' | sort -u); do
+            if ! grep -q -- "$flag" docs/USAGE.md; then
+              echo "::error::flag $flag is not documented in docs/USAGE.md"
+              MISSING=1
+            fi
+          done
+          [ "$MISSING" -eq 0 ] && echo "ok: every flag documented"
+          exit "$MISSING"

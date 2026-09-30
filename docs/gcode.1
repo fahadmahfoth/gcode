@@ -1,0 +1,369 @@
+.TH GCODE 1 "2026-09-30" "gcode 0.1.0" "User Commands"
+.SH NAME
+gcode \- natural language to shell command generator, locally and offline
+.SH SYNOPSIS
+.B gcode
+.RI [ OPTIONS ]
+.B \-c
+.I REQUEST
+.br
+.B gcode
+.RB [ \-\-fix | \-\-complete
+.I PARTIAL
+| \-\-explain
+.I COMMAND
+| \-\-init ]
+.br
+.B gcode
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B gcode
+translates a natural language request into a single shell command using a local
+GGUF language model and recent shell history as context. It runs entirely on the
+local machine: no API key, no account, no telemetry, and no network access after
+the model has been downloaded once.
+.PP
+Every generated command is classified into one of five risk levels
+.RB ( SAFE ", " LOW ", " MEDIUM ", " HIGH ", " CRITICAL )
+by a deterministic classifier that does not consult the model. Nothing is
+executed without explicit confirmation unless
+.B \-\-yes
+is given. Commands classified
+.B CRITICAL
+are refused unconditionally and cannot be run by any flag or configuration
+setting.
+.PP
+Requests may be written in English or Arabic.
+.SH MODES
+.TP
+.B \-c ", " \-\-command " " \fIREQUEST\fR
+Generate a command from a natural language request. The primary mode.
+.TP
+.B \-\-fix
+Repair the most recent failed command from shell history, using its exit code
+and error output as context.
+.TP
+.B \-\-complete " " \fIPARTIAL\fR
+Complete a partially written command.
+.TP
+.B \-\-explain " " \fICOMMAND\fR
+Explain an existing command: what it does, what it touches, and its risk level.
+Never executes and never generates.
+.TP
+.B \-\-init
+Install, check, or remove the shell history hook. See
+.B \-\-init
+under OPTIONS.
+.TP
+.B \-\-doctor
+Print a full health report: binary, model, shell hook, permissions, resources,
+and measured inference latency.
+.PP
+With no mode flag, gcode starts an interactive session in which each turn
+inherits the context of the previous turns.
+.SH OPTIONS
+.SS Input
+.TP
+.BR \-c ", " \-\-command " " \fIREQUEST\fR
+The natural language request.
+.TP
+.BR \-v ", " \-\-verbose
+Debug logging to standard error.
+.SS Execution control
+.TP
+.BR \-y ", " \-\-yes
+Skip the confirmation prompt. Classification, the risk line, and history logging
+still apply. Does not permit
+.B CRITICAL
+commands.
+.TP
+.BR \-n ", " \-\-no
+Print the generated command and risk level without executing. Same as
+.BR \-\-dry\-run .
+.TP
+.B \-\-dry\-run
+Print the command and its risk level, then exit.
+.TP
+.B \-\-edit
+Open
+.B $EDITOR
+on the generated command before confirmation. The edited command is
+re-classified, and a command that becomes
+.B CRITICAL
+is refused again.
+.SS Context
+.TP
+.BI \-\-context " " \fIN\fR
+Read the last
+.I N
+history entries as context. Default 15, maximum 1000.
+.TP
+.B \-\-no\-history
+Ignore shell history entirely.
+.TP
+.B \-\-no\-git
+Do not include git branch and status in the prompt.
+.TP
+.B \-\-no\-env
+Do not include operating system, shell, and working directory in the prompt.
+.TP
+.BI \-\-in " " \fIDIR\fR
+Build context as if the working directory were
+.IR DIR ,
+without changing directory.
+.SS Model
+.TP
+.BI \-\-model " " \fIPATH_OR_NAME\fR
+Use a specific GGUF file or a registry model name for this invocation.
+.TP
+.B \-\-list\-models
+List the models in the registry with sizes and checksums.
+.TP
+.BI \-\-download\-model " " [\fINAME\fR]
+Download a model. Without
+.I NAME
+the default model is downloaded.
+.TP
+.B \-\-update\-model
+Re-download the default model if its checksum has changed.
+.TP
+.BI \-\-use\-model " " \fINAME\fR
+Set the model in the configuration file permanently.
+.TP
+.BI \-\-n\-threads " " \fIN\fR
+Number of inference threads. Default 0, meaning all physical cores. Values above
+the physical core count reduce performance.
+.TP
+.BI \-\-n\-gpu\-layers " " \fIN\fR
+Layers to offload to the GPU. 0 disables offload. Useful values are the total
+layer count or higher.
+.TP
+.BI \-\-context\-size " " \fIN\fR
+Prompt context window in tokens. Range 512 to 32768. Default 4096. Below 2048,
+context and accuracy degrade noticeably.
+.TP
+.BI \-\-temperature " " \fIF\fR
+Sampling temperature, 0.0 to 2.0. Default 0.2. Use 0.0 for deterministic
+output.
+.SS Shell integration
+.TP
+.B \-\-init
+Install the history hook for the detected shell. Idempotent. Modified shell
+configuration is delimited by
+.B "# >>> gcode init >>>"
+and
+.BR "# <<< gcode init <<<" .
+.TP
+.B \-\-init \-\-check
+Report whether the hook is installed and which version, without modifying
+anything.
+.TP
+.B \-\-init \-\-remove
+Remove the hook, deleting exactly the delimited block and nothing else.
+.TP
+.BI \-\-generate\-completions " " \fISHELL\fR
+Write shell completions for
+.BR bash ", " zsh ", or " fish
+to standard output.
+.SS Diagnostics
+.TP
+.B \-\-info
+Report the inference backend, thread count, GPU layers, and model details.
+.TP
+.B \-\-bench
+Run the standard benchmark and report p50 and p95 latency, tokens per second, and
+peak memory.
+.TP
+.BI \-\-log\-level " " \fILEVEL\fR
+One of
+.BR error ", " warn ", " info ", " debug ", or " trace .
+Default
+.BR info .
+.TP
+.BI \-\-log\-file " " \fIPATH\fR
+Additionally write logs to a file.
+.TP
+.B \-\-no\-color
+Disable ANSI colour. Colour is disabled automatically when standard output is not
+a terminal.
+.TP
+.B \-\-json
+Emit a single JSON object and nothing else. No prompts, no colour. Intended for
+scripting.
+.TP
+.B \-\-version
+Print the version, commit hash, and build date.
+.TP
+.BR \-h ", " \-\-help
+Print usage information.
+.SH INTERACTIVE PROMPT
+When confirmation is required, the following keys are accepted:
+.TP
+.B y
+Execute the command.
+.TP
+.B n
+Cancel. Nothing runs. Default at every risk level.
+.TP
+.B e
+Edit the command in
+.BR $EDITOR ,
+then re-classify and confirm again.
+.TP
+.B c
+Copy the command to the clipboard without executing it.
+.TP
+.B ?
+Explain why the assigned risk level was chosen.
+.TP
+.B r
+Refine the natural language request and generate again.
+.PP
+.B Ctrl+C
+cancels the invocation.
+.SH RISK LEVELS
+.TP
+.B SAFE
+Read-only with no side effects.
+.TP
+.B LOW
+Read-only, or a trivial reversible write.
+.TP
+.B MEDIUM
+Broad filesystem traversal, package installation, service restart, or network
+fetch.
+.TP
+.B HIGH
+Data deletion, broad permission changes, piping a network download into a shell,
+firewall modification, or system power state change.
+.TP
+.B CRITICAL
+Destruction of a filesystem, home directory, or raw block device; fork bombs.
+Refused unconditionally. No flag, configuration key, or environment variable
+enables execution of a
+.B CRITICAL
+command.
+.PP
+Compound commands are split on
+.BR ; ", " && ", " || ", and " |
+and every segment is classified independently. The overall level is the highest
+of any segment.
+.SH FILES
+.TP
+.I ~/.gcode/history.jsonl
+Append-only command history, one JSON object per line, mode 0600. Rotated at
+10 MB, keeping the newest 5 MB as
+.I history.jsonl.1
+.TP
+.I ~/.config/gcode/config.toml
+User configuration. Every field is optional.
+.TP
+.I ~/.local/share/gcode/models/
+Model cache on Linux.
+.TP
+.I ~/Library/Application Support/gcode/models/
+Model cache on macOS.
+.TP
+.I /usr/share/gcode/models/
+System-wide model directory, used by distribution packages.
+.SH ENVIRONMENT
+.TP
+.B GCODE_MODEL
+Override the model path. Takes precedence over every other setting.
+.TP
+.B GCODE_MODEL_MIRROR
+Alternate download URL tried after the registry URL fails.
+.TP
+.B GCODE_CONFIG
+Path to an alternative configuration file.
+.TP
+.B GCODE_NO_HISTORY
+If set, do not read or write shell history.
+.TP
+.B GCODE_NO_INIT
+If set, the installer does not modify shell configuration.
+.TP
+.B GCODE_NO_MODEL
+If set, the installer does not download a model.
+.TP
+.B GCODE_INSTALL_DIR
+Directory the installer writes the binary to.
+.TP
+.B GCODE_HISTORY_FILE
+Path to the history file.
+.TP
+.B RUST_LOG
+Standard
+.B tracing
+filter, honoured by
+.B \-\-verbose
+and
+.BR \-\-log\-level .
+.SH EXAMPLES
+.TP
+Generate a command and review it without executing:
+.B gcode \-c "list all files larger than 1GB" \-\-dry\-run
+.TP
+Repair the last failed command:
+.B gcode \-\-fix
+.TP
+Complete a partial command:
+.B gcode \-\-complete "find /var/log \-type f \-name"
+.TP
+Explain a command without running it:
+.B gcode \-\-explain "tar \-xzf backup.tgz \-C /srv \-\-strip\-components=1"
+.TP
+Scripted use with no colour and no prompts:
+.B gcode \-\-json \-n \-c "count files by extension"
+.TP
+Check the installation:
+.B gcode doctor
+.SH EXIT STATUS
+.TP
+.B 0
+Success, or the user cancelled.
+.TP
+.B 1
+Runtime failure, such as a missing model or an inference error.
+.TP
+.B 2
+Invalid command line usage.
+.TP
+.B 3
+The generated command was classified
+.B CRITICAL
+and was refused.
+.SH SECURITY
+gcode performs no telemetry, no analytics, and no crash reporting. The only
+network request it ever makes is downloading a model file, once, and only when
+asked. Model files are verified against a SHA256 checksum pinned in the signed
+source repository; a mismatch causes the file to be deleted and the load to be
+refused.
+.PP
+Before the prompt is assembled, environment-derived strings and command output
+tails are redacted to remove values matching
+.BR *_TOKEN ", " *_SECRET ", " *_KEY ", " *_PASSWORD ", " AWS_* ", "
+.BR GITHUB_TOKEN ,
+.B Authorization
+headers, bearer tokens, PEM private key blocks, and long high-entropy runs.
+Redaction is a mitigation, not a guarantee; a secret in an unrecognised format
+may pass through. Command output is truncated to the last 2 kilobytes and at
+most 15 entries are used by default.
+.PP
+Decoding is constrained by a shell grammar, so the model cannot emit a token
+sequence that is not valid shell. This bounds, but does not eliminate, the effect
+of a hostile working directory, filename, or history entry on the generated
+command. Risk classification is independent of the model and re-derived from the
+emitted text, including after editing.
+.SH SEE ALSO
+.BR bash (1),
+.BR zsh (1),
+.BR find (1),
+.BR du (1)
+.PP
+Project documentation:
+<https://github.com/fahadmf/gcode>
+.SH AUTHORS
+gcode is maintained by the gcode maintainers.
+.SH LICENSE
+MIT.

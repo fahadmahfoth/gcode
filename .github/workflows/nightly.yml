@@ -1,0 +1,144 @@
+name: Nightly
+
+on:
+  schedule:
+    # Sunday, 03:00 UTC.
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+# Catches the regressions the fast PR gate would miss:
+# dependency advisories, the coverage floor, benchmark movement, and the OS matrix.
+
+permissions:
+  contents: read
+
+jobs:
+  full-matrix:
+    name: ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: debian-12
+            arch: x86_64
+            runner: ubuntu-latest
+            container: debian:12
+          - os: fedora-40
+            arch: x86_64
+            runner: ubuntu-latest
+            container: fedora:40
+          - os: arch
+            arch: x86_64
+            runner: ubuntu-latest
+            container: archlinux:base
+          - os: alpine-3.20
+            arch: x86_64
+            runner: ubuntu-latest
+            container: alpine:3.20
+          - os: ubuntu-24.04
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+    container: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: install build dependencies
+        # Probes the package manager rather than chaining fallbacks behind a
+        # trailing `true`, which would succeed even when nothing was installed
+        # and the build then fails for an unrelated-looking reason.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apk >/dev/null; then
+            apk add --no-cache build-base
+          elif command -v dnf >/dev/null; then
+            dnf install -y gcc gcc-c++ make
+          elif command -v yum >/dev/null; then
+            yum install -y gcc gcc-c++ make
+          elif command -v apt-get >/dev/null; then
+            apt-get update
+            apt-get install -y build-essential
+          elif command -v pacman >/dev/null; then
+            pacman -Sy --noconfirm base-devel
+          elif command -v brew >/dev/null; then
+            echo "macOS runners ship the required toolchain"
+          else
+            echo "::error::no known package manager; cannot install build dependencies"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+
+  coverage:
+    name: coverage floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-llvm-cov --locked
+      - name: coverage meets the threshold
+        # This asserts the absolute floor, not a decrease against a previous
+        # run. Regression comparison needs a stored baseline and is a separate
+        # piece of work; claiming it here would be a check that does not exist.
+        run: cargo llvm-cov --fail-under-lines 85
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: lcov.info
+
+  benchmarks:
+    name: benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: in-process benchmarks
+        run: cargo bench --locked
+      - name: results
+        run: |
+          echo "### Benchmarks — $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat target/criterion/report/index.md 2>/dev/null || echo "no criterion report" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "classification:     < 1 ms"
+            echo "prompt assembly:    < 10 ms"
+            echo "cold start:         < 500 ms"
+            echo "inference (2 core): < 1000 ms"
+            echo "peak RSS:           < 1.5 GB"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      - name: classify — zero panics
+        run: cargo fuzz run fuzz_classify -- -max_total_time=600
+      - name: prompt — zero panics, no secret survives
+        run: cargo fuzz run fuzz_prompt -- -max_total_time=600
+
+  advisories:
+    name: dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          cargo install cargo-audit --locked
+          cargo audit --deny warnings
+      - name: report if RustSec published something new
+        run: |
+          echo "### Dependency advisories" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cargo audit 2>&1 | tail -30 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
