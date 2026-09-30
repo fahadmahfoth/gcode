@@ -56,7 +56,14 @@ coverage_measured: null
 coverage_target: 85
 
 # Everything that needs a human. Empty means nothing is blocked on the human.
-needs_human: []
+needs_human:
+  - >-
+    GitHub Actions is refusing to start jobs: "The job was not started because
+    your account is locked due to a billing issue" (run 36765649289, every job,
+    2026-09-30). This is an account/billing state, not a repository problem,
+    and no change to a workflow can clear it. Until it is resolved, CI cannot
+    verify anything and Phase 0 tasks 0.8 and 0.12 stay open. The user must fix
+    the account.
 # Things that will need a human later, so nobody is surprised at the end.
 needs_human_later:
   - AUR account
@@ -84,6 +91,11 @@ last_command: "cargo test, cargo clippy --all-targets --all-features -- -D warni
 
 ### Known open items, not yet recorded above
 
+- The CI push trigger was fixed and verified: a push to `master` now produces a
+  run. The run fails, but not on the code — every job reports "The job was not
+  started because your account is locked due to a billing issue". See
+  `needs_human`. Until that clears, the CI-dependent acceptance criteria for
+  Phase 0 and the Linux x86_64 build cannot be settled.
 - `Cargo.toml`'s release profile sets `panic = "abort"` while ADR 0002 mandates
   `panic = "unwind"`. The comment above the profile claims the profile meets the
   ADR. One of the two is wrong and only the human can say which. Human-only per
@@ -109,6 +121,7 @@ last_command: "cargo test, cargo clippy --all-targets --all-features -- -D warni
 | `last_verified` | The last verification command that actually ran, and its result |
 | `toolchain_present` | `false` means `cargo` is unavailable, so no Rust claim can be verified |
 | `platforms_unverified` | Platforms in the build matrix with no successful build recorded |
+| `needs_human` | Account, key, or decision that blocks progress. Work stops here |
 
 ## Rules for updating
 

@@ -91,6 +91,10 @@ aarch64; Linux x86_64 and the CI run are still unverified**
 - [x] `cargo test` passes — 34 passed, 0 failed
 - [x] `cargo fmt --check` and `cargo clippy -D warnings` are clean
 - [ ] CI runs green on a push
+      — ⛔ **blocked on the account, not the code.** A push to `master` now
+      produces a run, which it never did before, but every job is refused with
+      *"The job was not started because your account is locked due to a billing
+      issue"* (run `36765649289`). No workflow edit can clear that.
 - [x] `README.md`, `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md` present
 - [x] No credential-shaped string anywhere in the tracked tree
 - [x] `AGENTS.md` tells an agent what to do next
@@ -99,9 +103,16 @@ Two of the four unchecked items are things only CI can settle: a Linux build and
 a green run. A workflow that has never run is not a passing workflow, so 0.8 and
 0.12 stay 🟡 no matter how confident the YAML looks.
 
+The push trigger was one of those two blockers and is now fixed: it named
+`main` and `develop`, but the default branch is `master`, so nothing had ever
+triggered a run. That is corrected and a run now appears on every push. The run
+itself fails for a reason outside the repository — GitHub is refusing to start
+jobs on this account.
+
 ### What unblocks this phase
 
-A push, so 0.8 can run on both platforms and settle the two remaining criteria.
+Clearing the GitHub Actions billing lock, so 0.8 can run on both platforms and
+settle the two remaining criteria. Nothing in this repository can do that.
 
 ### Note on task 0.1
 
