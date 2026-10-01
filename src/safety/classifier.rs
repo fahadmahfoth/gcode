@@ -402,13 +402,16 @@ pub fn classify_in_env(
         && level < Risk::High
     {
         level = Risk::High;
-    } else if reasons.iter().any(|r| r.pattern_id == "struct.taint") {
-        // Taint on an already-HIGH command escalates as far as it can.
-        let boosted = escalate(level);
-        if boosted > level {
-            level = boosted;
-        }
     }
+    // No second branch here, and the dead one it replaced is worth naming. There was
+    // an `else if` that escalated taint on an already-HIGH command, via an
+    // `escalate` helper that saturated at High. It could never fire, because this arm
+    // is only reached when `level >= High` — a command already HIGH is the worst
+    // taint can make it, since CRITICAL must not be reachable from a structural
+    // check. `cargo llvm-cov` surfaced it as four uncovered lines in a file otherwise
+    // at 99 %. The coverage number was not the defect; the contradiction was. The
+    // helper went with the branch: a function kept alive only by its own unit test
+    // is not covered code, it is unreferenced code.
 
     Verdict {
         level,
@@ -449,18 +452,6 @@ fn reason(id: &'static str, level: Risk, message: &'static str, segment: usize) 
         level,
         message,
         segment,
-    }
-}
-
-/// One level up, saturating.
-fn escalate(r: Risk) -> Risk {
-    match r {
-        Risk::Safe => Risk::Low,
-        Risk::Low => Risk::Medium,
-        // Saturated: a command already at HIGH is the worst taint can make it,
-        // and CRITICAL must never be lowered.
-        Risk::Medium | Risk::High => Risk::High,
-        Risk::Critical => Risk::Critical,
     }
 }
 
@@ -1063,15 +1054,6 @@ mod tests {
         assert_eq!(redirect_target(&toks), Some("out.txt"));
         let toks = tokenize("ls >> /tmp/log");
         assert_eq!(redirect_target(&toks), Some("/tmp/log"));
-    }
-
-    #[test]
-    fn escalation_saturates_at_high() {
-        assert_eq!(escalate(Risk::Safe), Risk::Low);
-        assert_eq!(escalate(Risk::Low), Risk::Medium);
-        assert_eq!(escalate(Risk::Medium), Risk::High);
-        assert_eq!(escalate(Risk::High), Risk::High);
-        assert_eq!(escalate(Risk::Critical), Risk::Critical);
     }
 
     #[test]

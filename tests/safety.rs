@@ -458,3 +458,43 @@ fn classification_is_deterministic() {
         }
     }
 }
+
+// The wording the empty case must use, in one place so the test above and the test
+// below cannot disagree about it.
+const EMPTY_EXPLANATION: &str = "what it runs: nothing — the command is empty after normalisation";
+
+// ── explain: inputs that hold nothing ───────────────────────────────────────
+
+/// A command made only of separators normalises to no segments, so the explanation
+/// has nothing to name. It says so in words rather than printing an empty list,
+/// which would read as a tool that failed to parse what it was asked about — and
+/// the empty case is exactly where a reader most needs to be told what happened.
+#[test]
+fn explaining_a_command_with_nothing_in_it_says_nothing_runs() {
+    for input in [";", "", "   ", "&&", "|", ";;;"] {
+        let explanation = classify(input).explanation();
+        assert!(
+            explanation.contains(EMPTY_EXPLANATION),
+            "{input:?} must say plainly that nothing runs, got: {explanation}"
+        );
+        assert!(
+            explanation.contains("what it touches: no path"),
+            "{input:?} must not invent a path, got: {explanation}"
+        );
+    }
+}
+
+/// The whole explanation, pinned exactly, so the wording cannot drift into something
+/// vaguer without this failing. `--explain` is the only mode that works without a
+/// model, which makes its output the most-read output in the project.
+#[test]
+fn the_empty_explanation_is_pinned() {
+    assert_eq!(
+        classify(";").explanation(),
+        "level: SAFE\n\
+         what it does: SAFE — no destructive pattern matched\n\
+         what it runs: nothing — the command is empty after normalisation\n\
+         what it touches: no path — it names none\n\
+         reasons: none — no destructive pattern matched\n"
+    );
+}

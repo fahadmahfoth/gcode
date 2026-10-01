@@ -846,6 +846,35 @@ mod tests {
         pattern_matches(pattern(id), segment)
     }
 
+    /// `NotNull` and `Contains` are reachable only through rows that use them, and
+    /// `cargo llvm-cov` reported both arms as never taken. Rather than delete table
+    /// vocabulary on the word of a coverage number, this pins what each one means —
+    /// `find /` is the row that uses `Contains`, and it is in the corpus, so the
+    /// interesting question is what the arms answer, not whether a row happens to
+    /// reach them today.
+    #[test]
+    fn the_substring_and_null_arms_answer_what_they_say() {
+        // `Contains` asks its inner element about the whole segment, so a slash
+        // anywhere in the segment satisfies it.
+        assert!(token_matches(&CONTAINS_ROOT, "/", "/usr/lib"), "root path");
+        assert!(
+            !token_matches(&CONTAINS_ROOT, "usr", "usr/lib"),
+            "no root slash"
+        );
+
+        // `NotNull` is the guard that stops `of=/dev/null` counting as a device
+        // write, which is the whole reason the arm exists.
+        assert!(token_matches(&Elem::NotNull, "of=/dev/sda", ""));
+        assert!(!token_matches(&Elem::NotNull, "of=/dev/null", ""));
+
+        // And the row that uses `Contains` really does fire, so the arm above is
+        // not describing a fiction.
+        assert!(
+            fires("medium.walk.root", "find / -name x"),
+            "the walk-root row"
+        );
+    }
+
     // ── the matcher itself ────────────────────────────────────────────────
 
     #[test]
