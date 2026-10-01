@@ -22,6 +22,8 @@
 
 use crate::cli::{Mode, Parsed};
 use crate::error::{Error, Result};
+use std::sync::Arc;
+
 use crate::inference::{GenParams, InferenceEngine};
 use crate::safety::{self, Risk};
 
@@ -84,7 +86,7 @@ impl Consenter for DenyAll {
 /// without a `Consenter` at all.
 pub fn run(
     parsed: &Parsed,
-    engine: Option<&dyn InferenceEngine>,
+    engine: Option<Arc<dyn InferenceEngine>>,
     consenter: &mut dyn Consenter,
     always_confirm: Risk,
 ) -> Result<Output> {
@@ -94,23 +96,23 @@ pub fn run(
             let engine = engine.ok_or(Error::NoEngine)?;
             let params = GenParams::default();
             let command =
-                crate::inference::generate_command(engine, request, &params).map_err(|e| {
+                crate::inference::generate_command(&engine, request, &params).map_err(|e| {
                     Error::Inference {
                         message: e.to_string(),
                     }
                 })?;
-            gate(command, parsed, consenter, engine, always_confirm)
+            gate(command, parsed, consenter, always_confirm)
         }
         Mode::Complete { partial } => {
             let engine = engine.ok_or(Error::NoEngine)?;
             let params = GenParams::default();
             let generated =
-                crate::inference::generate_command(engine, partial, &params).map_err(|e| {
+                crate::inference::generate_command(&engine, partial, &params).map_err(|e| {
                     Error::Inference {
                         message: e.to_string(),
                     }
                 })?;
-            gate(generated, parsed, consenter, engine, always_confirm)
+            gate(generated, parsed, consenter, always_confirm)
         }
         Mode::Fix | Mode::Interactive => Err(Error::ModeNotWired {
             mode: parsed.mode.to_string(),
@@ -178,7 +180,6 @@ fn gate(
     command: String,
     parsed: &Parsed,
     consenter: &mut dyn Consenter,
-    engine: &dyn InferenceEngine,
     always_confirm: Risk,
 ) -> Result<Output> {
     let verdict = safety::classify(&command);
@@ -195,7 +196,7 @@ fn gate(
     // `--dry-run` stops here: print and exit 0, having classified. A dry run that
     // asked for consent would defeat the point of the flag.
     if parsed.dry_run {
-        return Ok(output(&command, &verdict, "generate", false));
+        return Ok(output(&command, &verdict, &parsed.mode.to_string(), false));
     }
 
     // Consent. Suppressed by `--yes`, and only by `--yes`.
@@ -229,11 +230,15 @@ fn gate(
         }
     }
 
-    // Execution. A real shell invocation is Phase 2; until then this returns the
-    // verdict rather than pretending the command ran. `executed: false` says so
-    // in `--json`, so nothing downstream can mistake this for a success.
-    let _ = engine;
-    Ok(output(&command, &verdict, "generate", false))
+    // Execution. A real shell invocation is Phase 2.3; until then this returns
+    // the verdict rather than pretending the command ran, and `executed: false`
+    // says so in `--json` so nothing downstream can mistake it for a success.
+    //
+    // The engine is deliberately *not* a parameter here. An earlier draft carried
+    // it through and discarded it with `let _ = engine;`, which made it look like
+    // the executor was already wired. When 2.3 needs the engine, it will take it,
+    // and the change will be visible in the diff.
+    Ok(output(&command, &verdict, &parsed.mode.to_string(), false))
 }
 
 /// Builds an [`Output`] from a command and its verdict.

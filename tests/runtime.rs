@@ -9,9 +9,16 @@
 //! inference: classification, the block, consent, `--yes`, `--dry-run`, and the
 //! shape of `--json`.
 
+use std::sync::Arc;
 use std::sync::Mutex;
 
-use gcode::cli::{self, Mode, Parsed};
+/// Erase a concrete engine at the call site. `Arc::clone` alone does not coerce to
+/// `Arc<dyn InferenceEngine>`; the ascription inside the helper does.
+fn arc<T: InferenceEngine + 'static>(engine: &Arc<T>) -> Arc<dyn InferenceEngine> {
+    engine.clone()
+}
+
+use gcode::cli::{self, Parsed};
 use gcode::error::Error;
 use gcode::inference::{EngineInfo, GenParams, InferenceEngine};
 use gcode::runtime::{run, Consenter, Decision, DenyAll};
@@ -102,9 +109,9 @@ fn parse(args: &[&str]) -> Parsed {
 /// written against the same value `main` uses.
 const ALWAYS: Risk = Risk::Medium;
 
-fn generate(args: &[&str], reply: &str) -> (Parsed, FakeEngine) {
+fn generate(args: &[&str], reply: &str) -> (Parsed, Arc<FakeEngine>) {
     let parsed = parse(args);
-    let engine = FakeEngine::new(reply);
+    let engine = Arc::new(FakeEngine::new(reply));
     (parsed, engine)
 }
 
@@ -115,8 +122,8 @@ fn generate(args: &[&str], reply: &str) -> (Parsed, FakeEngine) {
 #[test]
 fn run_with_a_fake_engine_produces_the_expected_output() {
     let (parsed, engine) = generate(&["gcode", "-c", "list all files"], "ls -la");
-    let out =
-        run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("a SAFE command needs no consent");
+    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS)
+        .expect("a SAFE command needs no consent");
     assert_eq!(out.command, "ls -la");
     assert_eq!(out.level, Risk::Safe);
     assert_eq!(out.mode, "generate");
@@ -129,7 +136,7 @@ fn a_safe_command_needs_no_consenter_at_all() {
     // `DenyAll` cannot consent to anything, so a SAFE command completing under it
     // proves consent is genuinely not being asked for.
     let (parsed, engine) = generate(&["gcode", "-c", "list files"], "ls");
-    let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("safe commands run");
+    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("safe commands run");
     assert_eq!(out.level, Risk::Safe);
 }
 
@@ -140,7 +147,7 @@ fn a_generated_command_is_classified_not_trusted() {
         &["gcode", "-c", "clean everything", "--yes"],
         "rm -rf ./build",
     );
-    let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("HIGH is not blocked");
+    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("HIGH is not blocked");
     assert_eq!(out.level, Risk::High);
     assert!(
         !out.reasons.is_empty(),
@@ -159,7 +166,7 @@ fn the_level_comes_from_the_classifier_never_from_the_prompt() {
         ("history -c", Risk::Medium),
     ] {
         let (parsed, engine) = generate(&["gcode", "-c", "do something"], reply);
-        match run(&parsed, Some(&engine), &mut DenyAll, ALWAYS) {
+        match run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS) {
             Ok(out) => assert_eq!(out.level, expected, "{reply}"),
             Err(Error::ConsentDenied { level }) => {
                 // A command needing consent is still classified. The refusal is
@@ -186,7 +193,7 @@ fn a_critical_command_is_refused_whatever_the_flags() {
         let mut args = vec!["gcode", "-c", "delete everything"];
         args.extend(extra.iter().copied());
         let (parsed, engine) = generate(&args, "rm -rf /");
-        let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS);
+        let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS);
         match out {
             Err(Error::RiskBlocked { level, reasons }) => {
                 assert_eq!(level, Risk::Critical);
@@ -218,7 +225,7 @@ fn no_flag_combination_unblocks_critical() {
         let (parsed, engine) = generate(&args, "rm -rf /");
         assert!(
             matches!(
-                run(&parsed, Some(&engine), &mut DenyAll, ALWAYS),
+                run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS),
                 Err(Error::RiskBlocked { .. })
             ),
             "flags {flags:?} got past the block"
@@ -233,7 +240,7 @@ fn a_human_cannot_approve_a_critical_command() {
     let (parsed, engine) = generate(&["gcode", "-c", "delete everything"], "rm -rf /");
     let mut yes = Scripted::yes();
     assert!(matches!(
-        run(&parsed, Some(&engine), &mut yes, ALWAYS),
+        run(&parsed, Some(arc(&engine)), &mut yes, ALWAYS),
         Err(Error::RiskBlocked { .. })
     ));
 }
@@ -245,7 +252,7 @@ fn a_human_cannot_approve_a_critical_command() {
 fn a_pipe_cannot_run_a_command_that_needs_consent() {
     for reply in ["rm -rf ./build", "history -c", "kill -9 1"] {
         let (parsed, engine) = generate(&["gcode", "-c", "do a thing"], reply);
-        let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS);
+        let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS);
         assert!(
             matches!(out, Err(Error::ConsentDenied { .. })),
             "{reply} ran in a pipe: {out:?}"
@@ -257,7 +264,7 @@ fn a_pipe_cannot_run_a_command_that_needs_consent() {
 fn consent_granted_lets_a_high_command_proceed() {
     let (parsed, engine) = generate(&["gcode", "-c", "clean the build"], "rm -rf ./build");
     let mut yes = Scripted::yes();
-    let out = run(&parsed, Some(&engine), &mut yes, ALWAYS)
+    let out = run(&parsed, Some(arc(&engine)), &mut yes, ALWAYS)
         .expect("a HIGH command may run once confirmed");
     assert_eq!(out.level, Risk::High);
     assert!(!out.executed, "still no executor in Phase 1.8");
@@ -268,7 +275,8 @@ fn consent_granted_lets_a_high_command_proceed() {
 fn yes_replaces_the_prompt_but_not_the_classification() {
     let (parsed, engine) = generate(&["gcode", "-c", "clean", "--yes"], "rm -rf ./build");
     let mut denied = DenyAll;
-    let out = run(&parsed, Some(&engine), &mut denied, ALWAYS).expect("--yes skips the prompt");
+    let out =
+        run(&parsed, Some(arc(&engine)), &mut denied, ALWAYS).expect("--yes skips the prompt");
     assert_eq!(out.level, Risk::High, "the level is unchanged by --yes");
     assert!(!out.reasons.is_empty(), "the reasons are still reported");
 }
@@ -277,7 +285,7 @@ fn yes_replaces_the_prompt_but_not_the_classification() {
 fn yes_still_prints_the_level_and_reasons() {
     // Roadmap 3.7: "still classifies, still prints the level and reasons".
     let (parsed, engine) = generate(&["gcode", "-c", "clean", "--yes"], "history -c");
-    let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("--yes runs it");
+    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("--yes runs it");
     assert_eq!(out.level, Risk::Medium);
     assert!(!out.reasons.is_empty());
 }
@@ -288,7 +296,7 @@ fn yes_still_prints_the_level_and_reasons() {
 fn an_edit_that_turns_high_into_critical_is_re_blocked() {
     let (parsed, engine) = generate(&["gcode", "-c", "clean"], "rm -rf ./build");
     let mut editor = Editor("rm -rf /".to_owned());
-    match run(&parsed, Some(&engine), &mut editor, ALWAYS) {
+    match run(&parsed, Some(arc(&engine)), &mut editor, ALWAYS) {
         Err(Error::RiskBlocked { level, .. }) => assert_eq!(level, Risk::Critical),
         Ok(out) => panic!("the edited command ran: {out:?}"),
         Err(e) => panic!("wrong error: {e}"),
@@ -299,8 +307,8 @@ fn an_edit_that_turns_high_into_critical_is_re_blocked() {
 fn an_edit_that_stays_safe_is_classified_as_the_new_command() {
     let (parsed, engine) = generate(&["gcode", "-c", "clean"], "rm -rf ./build");
     let mut editor = Editor("ls -la".to_owned());
-    let out =
-        run(&parsed, Some(&engine), &mut editor, ALWAYS).expect("a SAFE edit needs no consent");
+    let out = run(&parsed, Some(arc(&engine)), &mut editor, ALWAYS)
+        .expect("a SAFE edit needs no consent");
     assert_eq!(
         out.command, "ls -la",
         "the edited command is what is reported"
@@ -315,7 +323,8 @@ fn dry_run_returns_the_command_and_the_level_and_runs_nothing() {
     let (parsed, engine) = generate(&["gcode", "-c", "clean", "--dry-run"], "rm -rf ./build");
     // DenyAll would refuse this command without --dry-run, so a success here also
     // proves the flag short-circuits before the prompt.
-    let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("a dry run always succeeds");
+    let out =
+        run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("a dry run always succeeds");
     assert_eq!(out.command, "rm -rf ./build");
     assert_eq!(out.level, Risk::High);
     assert!(!out.executed);
@@ -327,7 +336,7 @@ fn dry_run_still_refuses_critical_and_exits_non_zero() {
     // runs nothing. A dry run is not an exemption.
     let (parsed, engine) = generate(&["gcode", "-c", "nuke", "--dry-run"], "rm -rf /");
     assert!(matches!(
-        run(&parsed, Some(&engine), &mut DenyAll, ALWAYS),
+        run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS),
         Err(Error::RiskBlocked { .. })
     ));
 }
@@ -336,7 +345,7 @@ fn dry_run_still_refuses_critical_and_exits_non_zero() {
 fn the_no_alias_behaves_identically_to_dry_run() {
     for flag in ["-n", "--no", "--dry-run"] {
         let (parsed, engine) = generate(&["gcode", "-c", "clean", flag], "history -c");
-        let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS)
+        let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS)
             .unwrap_or_else(|e| panic!("{flag}: {e}"));
         assert!(!out.executed, "{flag} executed");
     }
@@ -347,7 +356,8 @@ fn the_no_alias_behaves_identically_to_dry_run() {
 #[test]
 fn json_is_a_single_object_on_one_line() {
     let (parsed, engine) = generate(&["gcode", "-c", "clean", "--json"], "ls -la");
-    let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("SAFE needs no consent");
+    let out =
+        run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("SAFE needs no consent");
     let json = out.to_json();
     assert!(!json.contains('\n'), "not one line: {json}");
     assert!(
@@ -359,7 +369,7 @@ fn json_is_a_single_object_on_one_line() {
 #[test]
 fn json_carries_the_level_reasons_and_executed_flag() {
     let (parsed, engine) = generate(&["gcode", "-c", "clean", "--json", "--yes"], "history -c");
-    let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("--json --yes runs it");
+    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("--json --yes runs it");
     let json = out.to_json();
     for key in [
         "\"command\":",
@@ -381,7 +391,7 @@ fn json_never_runs_a_command_needing_consent() {
     // same rule is checked directly: the caller has to opt in to consent.
     let (parsed, engine) = generate(&["gcode", "-c", "clean", "--json"], "history -c");
     assert!(matches!(
-        run(&parsed, Some(&engine), &mut DenyAll, ALWAYS),
+        run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS),
         Err(Error::ConsentDenied { .. })
     ));
 }
@@ -522,7 +532,8 @@ fn segments_are_reported_for_a_compound_command() {
         &["gcode", "-c", "look around", "--yes"],
         "ls -la && history -c",
     );
-    let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("--yes skips the prompt");
+    let out =
+        run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("--yes skips the prompt");
     assert_eq!(out.segments.len(), 2, "{:?}", out.segments);
     assert!(out.segments[0].contains("ls"));
     assert!(out.segments[1].contains("history"));
@@ -534,7 +545,8 @@ fn the_maximum_level_wins_through_the_run_loop_too() {
         &["gcode", "-c", "clean", "--yes"],
         "ls -la && rm -rf ./build",
     );
-    let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("HIGH, consented by --yes");
+    let out =
+        run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("HIGH, consented by --yes");
     assert_eq!(out.level, Risk::High);
     assert_eq!(
         out.command, "ls -la && rm -rf ./build",
@@ -544,16 +556,86 @@ fn the_maximum_level_wins_through_the_run_loop_too() {
 
 #[test]
 fn mode_names_match_the_cli_enum() {
-    // A typo in a mode string would show up only in `--json` output.
-    for args in [vec!["gcode", "-c", "x"], vec!["gcode", "--explain", "ls"]] {
-        let parsed = parse(&args);
-        let expected = match &parsed.mode {
-            Mode::Generate { .. } => "generate",
-            Mode::Explain { .. } => "explain",
-            _ => unreachable!("not used here"),
-        };
+    // A typo in a mode string would show up only in `--json` output. The expectation
+    // is written out per flag rather than read off the enum, because reading it off
+    // the enum is what let `--complete` report "generate" in the first place.
+    for (args, expected) in [
+        (vec!["gcode", "-c", "x"], "generate"),
+        (vec!["gcode", "--explain", "ls"], "explain"),
+        (vec!["gcode", "--complete", "ls -"], "complete"),
+    ] {
         let (parsed, engine) = generate(&args, "ls");
-        let out = run(&parsed, Some(&engine), &mut DenyAll, ALWAYS).expect("safe");
-        assert_eq!(out.mode, expected);
+        assert_eq!(
+            parsed.mode.to_string(),
+            expected,
+            "the enum's own name for {args:?}"
+        );
+        let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("safe");
+        assert_eq!(
+            out.mode, expected,
+            "the name reported in the output for {args:?}"
+        );
+    }
+}
+#[test]
+fn complete_with_no_engine_reports_no_engine() {
+    let parsed = parse(&["gcode", "--complete", "list"]);
+    match run(&parsed, None, &mut DenyAll, ALWAYS) {
+        Err(Error::NoEngine) => {}
+        other => panic!("expected NoEngine, got {other:?}"),
+    }
+}
+
+#[test]
+fn complete_asks_the_engine_to_finish_the_partial() {
+    let (parsed, engine) = generate(&["gcode", "--complete", "ls -"], "ls -la");
+    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS)
+        .expect("a SAFE command needs no consent");
+    assert_eq!(out.mode, "complete");
+    assert_eq!(out.level, Risk::Safe);
+    assert!(!out.executed, "nothing ran: no executor exists yet");
+    assert!(
+        engine.prompts().iter().any(|p| p.contains("ls -")),
+        "the partial is what the engine is asked to finish: {:?}",
+        engine.prompts()
+    );
+}
+
+/// CRITICAL is not an `Output` with `executed: false` — it is an error, because
+/// nothing downstream should be able to read a blocked command as merely pending.
+#[test]
+fn a_complete_that_returns_critical_is_refused_with_its_reason() {
+    let (parsed, engine) = generate(&["gcode", "--complete", "rm -"], "rm -rf /");
+    match run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS) {
+        Err(Error::RiskBlocked { level, .. }) => assert_eq!(level, Risk::Critical),
+        other => panic!("expected RiskBlocked, got {other:?}"),
+    }
+}
+
+/// A model that produces nothing is a failure, not an empty SAFE command. An empty
+/// string that reached an executor would look like a success.
+#[test]
+fn a_complete_that_produces_nothing_is_an_error() {
+    let (parsed, engine) = generate(&["gcode", "--complete", "ls -"], "");
+    match run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS) {
+        Err(Error::Inference { .. }) => {}
+        other => panic!("expected Inference, got {other:?}"),
+    }
+}
+
+/// The two enums with the same five names must not drift. This conversion is the
+/// only place they meet, so it is the only place a test can catch a rename that
+/// would silently change what a config value means.
+#[test]
+fn config_risk_levels_convert_one_for_one() {
+    use gcode::config::RiskLevel;
+    for (config_level, expected) in [
+        (RiskLevel::Safe, Risk::Safe),
+        (RiskLevel::Low, Risk::Low),
+        (RiskLevel::Medium, Risk::Medium),
+        (RiskLevel::High, Risk::High),
+        (RiskLevel::Critical, Risk::Critical),
+    ] {
+        assert_eq!(Risk::from(config_level), expected);
     }
 }

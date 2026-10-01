@@ -1,6 +1,6 @@
 //! The boundary between gcode and a model.
 //!
-//! Everything downstream of the prompt takes a `&dyn InferenceEngine`, so the
+//! Everything downstream of the prompt takes an `Arc<dyn InferenceEngine>`, so the
 //! whole pipeline can be exercised in milliseconds against a fake and no test
 //! in this repository ever loads a 400 MB file. That is not a convenience. It
 //! is the difference between a test suite people run before committing and one
@@ -23,7 +23,7 @@
 //!    well as a correctness one.
 
 use std::fmt;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::error::Result;
@@ -268,7 +268,7 @@ impl From<InferenceError> for crate::Error {
 /// [`InferenceError::Empty`] when nothing usable came back. A timeout never
 /// yields a partial command.
 pub fn generate_command(
-    engine: &dyn InferenceEngine,
+    engine: &Arc<dyn InferenceEngine>,
     prompt: &str,
     params: &GenParams,
 ) -> std::result::Result<String, InferenceError> {
@@ -280,7 +280,7 @@ pub fn generate_command(
     // that looks fine. Running the generation on its own thread and abandoning it
     // on timeout is the only option that covers a `generate` that ignores the
     // limit: the generation cannot be cancelled, but it also cannot be *used*.
-    let raw = run_within(engine, prompt, params)?;
+    let raw = run_within(Arc::clone(engine), prompt, params)?;
     if raw.len() > MAX_OUTPUT_CHARS {
         return Err(InferenceError::Generate {
             cause: format!(
@@ -315,28 +315,47 @@ pub fn generate_command(
 /// should do so — the real fix is cooperative cancellation, and the thread here
 /// is the backstop for an engine that does not offer it.
 fn run_within(
-    engine: &dyn InferenceEngine,
+    engine: Arc<dyn InferenceEngine>,
     prompt: &str,
     params: &GenParams,
 ) -> std::result::Result<String, InferenceError> {
     let (tx, rx) = std::sync::mpsc::channel();
     let timeout = params.timeout;
     let prompt = prompt.to_owned();
+    let params = params.clone();
 
-    // `&dyn InferenceEngine` is `Send` because the trait requires `Sync`, so a
-    // scoped thread can borrow it without an `Arc` and without the engine being
-    // cloneable. `scope` rather than `thread::spawn` because the borrow has to
-    // outlive the closure.
-    let received = std::thread::scope(|scope| {
-        scope.spawn(|| {
-            let _ = tx.send(
-                engine
-                    .generate(&prompt, params)
-                    .map_err(InferenceError::from),
-            );
-        });
-        rx.recv_timeout(timeout)
+    // # Why `thread::spawn` and not `thread::scope`
+    //
+    // `scope` joins every thread it spawned before it returns. An earlier draft
+    // used it here and the comment claimed the generation was "abandoned" on
+    // timeout, which was false: `recv_timeout` returned at the deadline, and then
+    // the call blocked in the scope's join until the model finished anyway. A
+    // timeout that does not return is not a timeout.
+    //
+    // `spawn` detaches, so this returns at the deadline whether or not the engine
+    // honours `params.timeout` itself. The abandoned thread keeps its own `Arc`
+    // clone, so the engine is not dropped while it is still generating, and it
+    // exits on its own when the model stops. Nothing it produces can reach the
+    // caller: `tx` is dropped with the closure, so the value is discarded.
+    //
+    // The cost is that a genuinely stuck engine leaks one thread per call. That is
+    // why `GenParams::validate` also caps `timeout`, and why the sampler must check
+    // its own deadline: the wall clock is the backstop, not the mechanism.
+    let handle = std::thread::spawn(move || {
+        let _ = tx.send(
+            engine
+                .generate(&prompt, &params)
+                .map_err(InferenceError::from),
+        );
     });
+
+    let received = rx.recv_timeout(timeout);
+
+    // If the answer arrived, join so the thread is not left holding an Arc for a
+    // value nobody will read. If it timed out, drop the handle and let it go.
+    if received.is_ok() {
+        let _ = handle.join();
+    }
 
     // Two layers of `Result`: the outer is "did an answer arrive in time", the
     // inner is "what did the engine say". They mean different things and must
@@ -637,10 +656,21 @@ pub fn require() -> Result<&'static (dyn InferenceEngine + Sync)> {
 
 #[cfg(test)]
 mod tests {
+    /// `Arc::new` alone does not coerce to `Arc<dyn InferenceEngine>`: the
+    /// coercion needs a type ascription at the call site, which would make every
+    /// test spell out an `as` it does not mean. One named helper keeps the tests
+    /// about behaviour.
+    fn arc<T: InferenceEngine + 'static>(engine: &Arc<T>) -> Arc<dyn InferenceEngine> {
+        engine.clone()
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// An engine that returns a fixed string and counts its calls.
+    ///
+    /// Not `Clone`: the counters live inside the struct, so a test that asserts
+    /// on them keeps a concrete `Arc<FakeEngine>` and erases it only at the call.
     struct FakeEngine {
         reply: String,
         calls: AtomicUsize,
@@ -720,17 +750,18 @@ mod tests {
 
     #[test]
     fn a_fake_engine_drives_the_pipeline() {
-        let engine = FakeEngine::new("ls -la");
-        let out = generate_command(&engine, "list files", &GenParams::default()).expect("generate");
+        let engine = Arc::new(FakeEngine::new("ls -la"));
+        let out =
+            generate_command(&arc(&engine), "list files", &GenParams::default()).expect("generate");
         assert_eq!(out, "ls -la");
         assert_eq!(engine.calls(), 1);
     }
 
     #[test]
     fn the_params_reach_the_engine() {
-        let engine = FakeEngine::new("ls");
+        let engine = Arc::new(FakeEngine::new("ls"));
         let params = GenParams::default().with_max_tokens(64);
-        generate_command(&engine, "list", &params).expect("generate");
+        generate_command(&arc(&engine), "list", &params).expect("generate");
         assert_eq!(
             *engine.params_seen.get().expect("params were recorded"),
             params
@@ -739,7 +770,7 @@ mod tests {
 
     #[test]
     fn engine_info_renders_the_context_and_threads() {
-        let engine = FakeEngine::new("ls");
+        let engine = Arc::new(FakeEngine::new("ls"));
         let text = engine.info().to_string();
         assert!(text.contains("fake"));
         assert!(text.contains("4096"));
@@ -853,9 +884,9 @@ mod tests {
     /// check its own clock cannot return a late answer.
     #[test]
     fn a_timeout_is_an_error_and_not_a_partial_command() {
-        let engine = SlowEngine;
+        let engine = Arc::new(SlowEngine);
         let params = GenParams::default().with_timeout(Duration::from_millis(1));
-        let err = generate_command(&engine, "hello", &params).expect_err("must not succeed");
+        let err = generate_command(&arc(&engine), "hello", &params).expect_err("must not succeed");
         assert!(
             matches!(err, InferenceError::Timeout { .. }),
             "expected a timeout, got {err:?}"
@@ -866,14 +897,45 @@ mod tests {
         );
     }
 
+    /// # Regression: a timeout must return *at* the deadline
+    ///
+    /// The test above already passed when the implementation used
+    /// `thread::scope`, which was the bug. `scope` joins every thread it spawned,
+    /// so `recv_timeout` returned at the deadline and then the call blocked in
+    /// the join until the engine finished. The error was correct; the timing was
+    /// a lie. 1 ms against a 50 ms engine produced the right `Timeout` 50 ms
+    /// later.
+    ///
+    /// So this asserts the wall clock, not the variant. The margin is wide on
+    /// purpose: the sleep is 40x the ceiling, so a scheduler hiccup cannot turn
+    /// this into a flake, while a join would overshoot by roughly the full sleep.
+    #[test]
+    fn a_timeout_returns_at_the_deadline_and_does_not_wait_for_the_engine() {
+        let engine = Arc::new(SlowEngine);
+        let params = GenParams::default().with_timeout(Duration::from_millis(10));
+        let started = std::time::Instant::now();
+        let err = generate_command(&arc(&engine), "hello", &params).expect_err("must not succeed");
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(err, InferenceError::Timeout { .. }),
+            "expected a timeout, got {err:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(40),
+            "generate_command took {elapsed:?} against a 10ms ceiling; a timeout \
+             that waits for the engine is not a timeout"
+        );
+    }
+
     /// An engine that finishes inside the ceiling is not penalised by the thread
     /// the timeout is implemented with.
     #[test]
     fn a_fast_engine_is_not_slowed_by_the_deadline() {
-        let engine = FakeEngine::new("ls -la");
+        let engine = Arc::new(FakeEngine::new("ls -la"));
         let params = GenParams::default().with_timeout(Duration::from_secs(30));
         let started = std::time::Instant::now();
-        let out = generate_command(&engine, "list", &params).expect("generate");
+        let out = generate_command(&arc(&engine), "list", &params).expect("generate");
         assert_eq!(out, "ls -la");
         assert!(
             started.elapsed() < Duration::from_secs(1),
@@ -896,18 +958,18 @@ mod tests {
 
     #[test]
     fn zero_max_tokens_is_refused() {
-        let engine = FakeEngine::new("ls");
+        let engine = Arc::new(FakeEngine::new("ls"));
         let params = GenParams::default().with_max_tokens(0);
-        let err = generate_command(&engine, "list", &params).expect_err("refuse");
+        let err = generate_command(&arc(&engine), "list", &params).expect_err("refuse");
         assert!(matches!(err, InferenceError::BadParams(_)));
         assert_eq!(engine.calls(), 0, "must not call a bad engine");
     }
 
     #[test]
     fn a_zero_timeout_is_refused_before_generation() {
-        let engine = FakeEngine::new("ls");
+        let engine = Arc::new(FakeEngine::new("ls"));
         let params = GenParams::default().with_timeout(Duration::ZERO);
-        let err = generate_command(&engine, "list", &params).expect_err("refuse");
+        let err = generate_command(&arc(&engine), "list", &params).expect_err("refuse");
         assert!(matches!(err, InferenceError::BadParams(_)));
         assert_eq!(engine.calls(), 0);
     }
@@ -918,30 +980,30 @@ mod tests {
             top_p: 1.5,
             ..GenParams::default()
         };
-        let engine = FakeEngine::new("ls");
-        let err = generate_command(&engine, "list", &params).expect_err("refuse");
+        let engine = Arc::new(FakeEngine::new("ls"));
+        let err = generate_command(&arc(&engine), "list", &params).expect_err("refuse");
         assert!(matches!(err, InferenceError::BadParams(_)));
     }
 
     #[test]
     fn a_runaway_generation_is_refused() {
-        let engine = RunawayEngine;
-        let err = generate_command(&engine, "go", &GenParams::default()).expect_err("refuse");
+        let engine = Arc::new(RunawayEngine);
+        let err = generate_command(&arc(&engine), "go", &GenParams::default()).expect_err("refuse");
         let text = err.to_string();
         assert!(text.contains("runaway") || text.contains("limit"), "{text}");
     }
 
     #[test]
     fn an_empty_reply_is_an_error_not_an_empty_command() {
-        let engine = FakeEngine::new("   ");
-        let err = generate_command(&engine, "go", &GenParams::default()).expect_err("refuse");
+        let engine = Arc::new(FakeEngine::new("   "));
+        let err = generate_command(&arc(&engine), "go", &GenParams::default()).expect_err("refuse");
         assert!(matches!(err, InferenceError::Empty));
     }
 
     #[test]
     fn a_fence_with_nothing_inside_is_an_error() {
-        let engine = FakeEngine::new("```bash\n```");
-        let err = generate_command(&engine, "go", &GenParams::default()).expect_err("refuse");
+        let engine = Arc::new(FakeEngine::new("```bash\n```"));
+        let err = generate_command(&arc(&engine), "go", &GenParams::default()).expect_err("refuse");
         assert!(matches!(err, InferenceError::Empty));
     }
 

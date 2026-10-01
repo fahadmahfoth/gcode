@@ -8,6 +8,8 @@
 //! terminal belongs in `ui/`, which keeps `--json` a serialisation of data
 //! rather than a scrape of the human-facing renderer.
 
+use std::sync::Arc;
+
 use gcode::cli;
 use gcode::config::RiskLevel;
 use gcode::runtime::{run, DenyAll, DEFAULT_CONFIRM_AT};
@@ -59,7 +61,7 @@ fn main() {
     // No model is loaded until Phase 1.5 lands the sampler, so the modes that
     // generate a command report that honestly rather than inventing a plausible
     // answer. `--explain` needs no model, which is why it works today.
-    let engine: Option<&dyn gcode::inference::InferenceEngine> = None;
+    let engine: Option<Arc<dyn gcode::inference::InferenceEngine>> = None;
 
     // `always_confirm` is resolved once, here, so the run loop never touches the
     // filesystem and the CLI never guesses a threshold.
