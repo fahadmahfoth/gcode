@@ -421,7 +421,7 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
 
 ## Phase 2 — Shell integration & history
 
-**Status: 🚧 in progress — 2.1 done, 2.2–2.7 not started**
+**Status: 🚧 in progress — 2.1 and 2.2 done, 2.3–2.7 not started**
 **Goal: `gcode --fix` works because the tool knows what just failed.**
 
 ### 2.1 History storage — `src/context/history.rs`
@@ -468,12 +468,41 @@ a tested format.
 
 ### 2.2 Environment context — `src/context/env.rs`
 
-- [ ] `cwd`, `os`, `arch`, `shell`, `$SHELL` version
-- [ ] Git: `branch`, `dirty`, `last commit subject` — 30 ms timeout, silent
-      failure outside a repo
-- [ ] `GCODE_NO_HISTORY`, `GCODE_NO_GIT`, `GCODE_NO_ENV` respected
-- [ ] **Test:** a fixture repo yields the right branch and dirty flag
-- [ ] **Test:** outside a repo, no error and no output
+- [x] `cwd`, `os`, `arch`, `shell`, `$SHELL` version
+- [x] Git: `branch`, `dirty`, `last commit subject` — **done differently.** The
+      budget is 250 ms, not the 30 ms written here first, and that change is
+      measured rather than preferred. Two `git` calls are issued together, so the
+      cost is one spawn rather than two, but even then the pair costs 20–30 ms on an
+      idle machine and ~40 ms under a 16-way CPU load. A budget below the cost of
+      the work is a budget that always expires, and an always-expired probe is a
+      feature that never runs. The deadline still exists and still kills the child;
+      250 ms is roughly ten times the worst observed cost and still far below where a
+      person notices. Two of the three facts are read from one
+      `git status --porcelain=v2 --branch`, and a repository with no commits — every
+      new project — reports its branch and no subject rather than nothing
+- [x] Silent failure outside a repo. `git` exits 128 and prints nothing there, so the
+      probe reads the **exit status**, not the emptiness of stdout: an empty stdout
+      is also the correct answer to "which files changed?" in a clean repository, and
+      treating it as failure — or, worse, as success — is a wrong answer in both
+      directions
+- [x] `GCODE_NO_HISTORY`, `GCODE_NO_GIT`, `GCODE_NO_ENV` respected
+- [x] **Test:** a fixture repo yields the right branch and dirty flag
+- [x] **Test:** outside a repo, no error and no output
+- [x] **Test, beyond the list above:** 20 tests in `src/context/env/tests.rs`,
+      including a detached HEAD reported as no branch rather than a branch named
+      `detached`; a repository with no commits; a probe that overruns its deadline
+      returning rather than blocking; `$SHELL` reduced to a program name; a
+      four-line `bash --version` reduced to one line; `GCODE_NO_GIT` suppressing only
+      git while leaving cwd and platform intact; and a commit subject containing
+      both an XML attribute break and a secret-shaped value arriving redacted and
+      escaped
+
+**Not wired, and not a gap:** `build_prompt` still has no production caller until
+Phase 1.5 lands the sampler, so nothing calls `EnvSnapshot::collect` at runtime yet.
+The same is true of the history store in 2.1, and for the same reason — these are the
+parts of the pipeline that can be built and tested ahead of the engine that will
+consume them. Measured coverage: `context/env.rs` 94.51 % of lines, 94.98 % of
+regions, and the workspace total rose from 92.57 % to 93.0 % of lines.
 
 ### 2.3 Bash hook — `shell/gcode.bash`
 

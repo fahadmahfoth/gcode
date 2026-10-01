@@ -16,6 +16,34 @@ This rule is what keeps the documentation honest — see
 
 ### Added
 
+- `src/context/env.rs` (Phase 2.2): the environment context. The working directory,
+  OS, architecture, `$SHELL` reduced to a program name, its version, and the git
+  branch, dirty flag, and last commit subject. Every fact is optional, and a fact
+  that could not be read is absent rather than defaulted: there is no `unknown` branch
+  name and no assumed `bash`, because a placeholder teaches the model that
+  placeholders are what this field looks like.
+  - The git probe is bounded by one deadline for the whole probe, not one per
+    question, and runs its two `git` calls concurrently. **The deadline is 250 ms,
+    not the 30 ms the roadmap first specified** — measured, not preferred: the
+    concurrent pair costs 20–30 ms idle and ~40 ms under load, so a 30 ms budget
+    expires before the work finishes and the feature would never report anything.
+    The deadline still kills the child on overrun.
+  - Branch and dirty flag come from a single `git status --porcelain=v2 --branch`,
+    so a repository with no commits — every new project — still reports its branch,
+    with no subject, instead of reporting nothing.
+  - Failure outside a repository is decided by the **exit status**. `git` exits 128
+    and prints nothing there, and empty stdout is also the correct answer to "which
+    files changed?" in a clean repository, so stdout alone cannot distinguish them.
+  - A detached `HEAD` is reported as no branch rather than as a branch named
+    `detached`.
+  - `GCODE_NO_GIT` omits the repository facts and keeps the directory and platform;
+    `GCODE_NO_ENV` omits every environment fact and takes precedence.
+  - The module renders nothing. Facts move into `prompt::Context` and are redacted
+    and XML-escaped there (ADR 0006), because a branch name and a commit subject are
+    both free text a user controls. 20 tests, with real git repositories in temporary
+    directories and a real subprocess for the shell probe.
+  - Still has no production caller: `build_prompt` is unwired until Phase 1.5 lands
+    the sampler.
 - `src/context/history.rs` (Phase 2.1): the JSONL history store. `HistoryEntry`,
   backwards `read_last(n)` that seeks a chunk at a time and stops at the `n`-th
   newline, single-`write` + `fsync` appends, stats, and rotation at 10 MiB keeping

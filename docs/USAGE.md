@@ -287,8 +287,15 @@ silently dropped is a config that appears to do nothing, which is the failure
 this strictness exists to prevent.
 
 Environment variables: `GCODE_MODEL`, `GCODE_MODEL_MIRROR`, `GCODE_NO_HISTORY`,
-`GCODE_NO_INIT`, `GCODE_NO_MODEL`, `GCODE_CONFIG`, `GCODE_LOG_LEVEL`,
-`GCODE_HISTORY_FILE`, `RUST_LOG`.
+`GCODE_NO_GIT`, `GCODE_NO_ENV`, `GCODE_NO_INIT`, `GCODE_NO_MODEL`, `GCODE_CONFIG`,
+`GCODE_LOG_LEVEL`, `GCODE_HISTORY_FILE`, `RUST_LOG`.
+
+`GCODE_NO_GIT` and `GCODE_NO_ENV` control what the model is told about the machine.
+`GCODE_NO_GIT=1` omits the repository facts only — the directory and platform are
+still sent. `GCODE_NO_ENV=1` omits every environment fact, including the working
+directory, and takes precedence over `GCODE_NO_GIT`. Both suppress a fact rather than
+sending a placeholder: the prompt never receives `git_branch="?"`, because a model
+that has seen question marks standing in for branch names will produce them.
 
 ### Defaults
 

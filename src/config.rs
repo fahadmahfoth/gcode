@@ -51,6 +51,10 @@ pub const ENV_MODEL_MIRROR: &str = "GCODE_MODEL_MIRROR";
 pub const ENV_NO_HISTORY: &str = "GCODE_NO_HISTORY";
 /// Environment variable that skips shell-hook installation.
 pub const ENV_NO_INIT: &str = "GCODE_NO_INIT";
+/// Environment variable that skips the git part of the environment context.
+pub const ENV_NO_GIT: &str = "GCODE_NO_GIT";
+/// Environment variable that skips the whole environment context.
+pub const ENV_NO_ENV: &str = "GCODE_NO_ENV";
 /// Environment variable that forbids any model download.
 pub const ENV_NO_MODEL: &str = "GCODE_NO_MODEL";
 /// Environment variable holding the log level.
@@ -239,10 +243,19 @@ pub struct Env {
     pub no_history: Option<bool>,
     /// `GCODE_NO_INIT`.
     pub no_init: Option<bool>,
+    /// `GCODE_NO_GIT`. Phase 2.2.
+    pub no_git: Option<bool>,
+    /// `GCODE_NO_ENV`. Phase 2.2. Stronger than `no_git`: it suppresses every
+    /// environment fact, not just the repository one.
+    pub no_env: Option<bool>,
     /// `GCODE_NO_MODEL`.
     pub no_model: Option<bool>,
     /// `GCODE_LOG_LEVEL`.
     pub log_level: Option<String>,
+    /// `$SHELL`, the login shell. Not a `GCODE_` variable, but read here for the
+    /// same reason: the environment context needs it, and reading `std::env` at the
+    /// point of use is what makes that untestable.
+    pub shell: Option<String>,
     /// `GCODE_CONFIG`, kept for diagnostics. The path itself is resolved by
     /// [`paths::config_file`], not here.
     pub config: Option<PathBuf>,
@@ -259,8 +272,11 @@ impl Env {
             model_mirror: var(ENV_MODEL_MIRROR),
             no_history: flag(ENV_NO_HISTORY),
             no_init: flag(ENV_NO_INIT),
+            no_git: flag(ENV_NO_GIT),
+            no_env: flag(ENV_NO_ENV),
             no_model: flag(ENV_NO_MODEL),
             log_level: var(ENV_LOG_LEVEL),
+            shell: var("SHELL"),
             config: var_path("GCODE_CONFIG"),
             history_file: var_path("GCODE_HISTORY_FILE"),
         }
