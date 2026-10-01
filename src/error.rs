@@ -154,6 +154,19 @@ pub enum Error {
     )]
     NoEngine,
 
+    /// The history file could not be read, written, or rotated.
+    ///
+    /// One variant rather than several. A history failure is never a reason to
+    /// refuse a command: the file is a convenience for the next invocation, and a
+    /// user whose history directory is read-only should still get their command.
+    /// So this is reported and the work continues, which is the caller's decision
+    /// to make with the error in hand.
+    #[error("history: {message}")]
+    History {
+        /// What failed, with the path involved.
+        message: String,
+    },
+
     /// A mode is parsed and validated but has no implementation yet.
     #[error("the {mode} mode is parsed but not implemented yet")]
     ModeNotWired {

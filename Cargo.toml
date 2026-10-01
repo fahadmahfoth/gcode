@@ -85,6 +85,20 @@ toml = { version = "0.8", features = ["parse"] }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.10"
 
+# JSONL for the history store (Phase 2.1). The direction matters here and is not
+# the same decision as `--json`.
+#
+# `--json` output is hand-built in src/lib.rs because its shape is fixed and it is
+# write-only: six known fields, no parsing, no unknown input. History is the
+# opposite. Every line is read back, it was written by another version of this
+# program or by a user's editor, and the ADR requires a malformed line to be
+# skipped rather than misread. That is exactly the case the comment above makes
+# for `toml` over a hand parser, so it gets a real parser here too.
+#
+# Same authors, licence, and maintenance story as `serde` and `toml` above, which
+# are already in the tree. It adds no capability, only a format reader.
+serde_json = "1.0"
+
 # The build script re-parses models/registry.toml to enforce ADR 0010's rules at
 # compile time. It needs the same parser the library does, so that a rule written
 # in build.rs and a rule in src/model/registry.rs cannot disagree about what the
