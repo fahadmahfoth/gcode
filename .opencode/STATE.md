@@ -13,10 +13,10 @@ first_incomplete_task: 1.8
 # Phase 3 was started ahead of the rest of 1.8 because it is pure Rust, has no
 # dependency on the model, and gates everything that later runs a command.
 #
-# 3.1-3.5, 3.7, and 3.8 are written, tested, and passing, and 3.6 is mostly
-# written. Still open in phase 3: Ctrl+C handling, the MEDIUM+ cost estimate, the
-# clipboard key, and looping back to the prompt after an edit. Phase 3 stays
-# in_progress, not done.
+# 3.1-3.5, 3.7, and 3.8 are written, tested, and passing. 3.6 has its keymap, the
+# default-to-no behaviour, the non-interactive refusal, and re-prompting after an
+# edit. Still open in phase 3: Ctrl+C handling, the MEDIUM+ cost estimate, and the
+# clipboard key. Phase 3 stays in_progress, not done.
 
 # Phases, in order. `next` is the only actionable one.
 phases:
@@ -32,14 +32,15 @@ phases:
     next: true
   - id: 2
     name: "Shell integration & history"
-    status: blocked
+    # 2.1 is written and verified: the JSONL store, 29 tests. Nothing reads or
+    # writes it yet, because the shell hooks and the prompt wiring come later.
+    status: in_progress
   - id: 3
     name: "Safety layer"
-    # 3.1-3.5, 3.7, 3.8 written and verified, 3.6 mostly: Risk/Verdict,
-    # normalisation and splitting, the blocklist, 39 pattern rows, the structural
-    # checks, the prompt, --yes semantics, and --explain. Still open: Ctrl+C, the
-    # cost estimate, the clipboard key, re-prompting after an edit, and the
-    # coverage criterion, which needs cargo-llvm-cov.
+    # 3.1-3.5, 3.7, 3.8 written and verified, and 3.6 has its keymap, the
+    # default-to-no behaviour, the non-interactive refusal, and re-prompting after
+    # an edit. Still open: Ctrl+C handling, the MEDIUM+ cost estimate, and the
+    # clipboard key. Both coverage criteria are now measured and met.
     status: in_progress
   - id: 4
     name: "Packaging"
@@ -65,7 +66,12 @@ phases:
 
 code_written: true
 tests_written: true
-coverage_measured: null
+# Measured with `cargo llvm-cov --summary-only`. Workspace total is 92.57 % of
+# lines / 92.15 % of regions. The modules Phase 1.8 names: runtime 94.23 %,
+# ui/prompt 82.37 %, safety/patterns 98.33 %, safety/classifier 99.20 % (no
+# uncovered line; the region gap is short-circuit right-hand sides),
+# safety/mod 100 %.
+coverage_measured: 92.57
 coverage_target: 85
 
 # Everything that needs a human. Empty means nothing is blocked on the human.
@@ -115,10 +121,12 @@ platforms_verified:
   - macOS aarch64 (rustc 1.98.1)
 platforms_unverified:
   - Linux x86_64
-last_verified: "macOS aarch64, rustc 1.98.1, after Phase 1.8 run loop and Phase 3.1-3.8: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 388 passed / 0 failed (326 lib incl. 100 safety patterns + 71 safety classifier + 40 context + 29 inference + 28 download + 20 registry + prompt tests, 14 integration, 28 tests/runtime.rs, 17 tests/safety.rs incl. the 10 000-command fuzz, 3 doc); `cargo build --locked` passed; MSRV audit over `cargo metadata --format-version 1 --locked` confirms all 65 locked packages declare rust-version <= 1.75. `cargo build --release --locked` FAILS BY DESIGN: build.rs refuses the placeholder model registry (see needs_human). `mandoc -T lint docs/gcode.1` clean. Secret scan clean apart from two reviewed false positives, both the same illustrative `grep -r 'token=' src/` example. CLI verified by hand: `--explain 'rm -rf /'` exits 0 with a CRITICAL explanation and no model; `--explain --json` emits one object; `-c` with no model exits 1 with an honest message; `--fix --explain ls` exits 2; `--version` exits 0. Eight defects were found and fixed by this work: `targets_for` returned `(path, command)` but was destructured as `(command, path)`, so taint never fired; the SQL matcher compared a whole quoted token against a single word; the home blocklist matched any path under `~`, over-blocking `rm -rf ~/Documents`; the coverage test compared list lengths instead of set equality; `classify_in_env` was over Clippy's 100-line limit; `needs_confirmation` implemented `config.rs`'s 'regardless of --yes', which would have made `--yes` unusable at the default MEDIUM threshold and contradicted the roadmap's own 3.7 test; the `Consenter` trait originally returned a bare yes, so a prompt returning an edited command would have had the core run the pre-edit string; and the first `run()` draft classified the natural-language request instead of the generated command"
-previous_last_verified: "macOS aarch64, rustc 1.98.1, after Phase 1.7: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 223 passed / 0 failed; `cargo build --locked` passed; MSRV audit clean over 65 locked packages; `mandoc -T lint docs/gcode.1` clean; secret scan clean; `cargo build --release --locked` failed by design on the placeholder registry"
+last_verified: "macOS aarch64, rustc 1.98.1, after Phase 2.1 history store and the Phase 1.8/3.6 coverage work: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 437 passed / 0 failed (368 lib incl. 18 ui/prompt and 29 context/history, 14 integration, 33 tests/runtime.rs, 19 tests/safety.rs incl. the 10 000-command fuzz, 3 doc); `cargo build --locked` passed; `cargo llvm-cov --summary-only` measured 92.57 % of lines across the workspace; MSRV audit over `cargo metadata --format-version 1 --locked` confirms all 68 locked packages declare rust-version <= 1.75 (up from 65: serde_json, itoa, zmij, all MSRV-compatible). `cargo build --release --locked` FAILS BY DESIGN: build.rs refuses the placeholder model checksum. `mandoc -T lint docs/gcode.1` clean. Secret scan clean apart from three reviewed false positives, all the same illustrative `grep -r 'token=' src/` example (CHANGELOG, redact.rs comment, and the copy of this field in STATE.md). CLI verified by hand: `--explain 'rm -rf /'` exits 0 with no model; `--complete 'ls -'` exits 1 asking for a model; `-c` with no model exits 1 with an honest message; `--fix --explain ls` exits 2; `--version` exits 0; `-c 'delete everything from root' -y` exits 1. Six defects found and fixed by this work: the inference timeout used `thread::scope` and joined, so it only expired after the engine returned; `e` ended the turn instead of looping back to the prompt; `Prompt::writer` took the writer out of `self`, so an injected writer silently received only the first block and every later block fell through to stderr; `gate` passed the literal \"generate\" as the mode, so `--complete` reported `mode: \"generate\"` in `--json`; the trim-and-reject-empty after an edit lived inside the `$EDITOR` path, so an editor returning whitespace passed it through; and `escalate` in classifier.rs was left with no production caller. Two things that looked like defects and were not: a short-circuit right-hand side reported as an uncovered region, and a test helper whose `Scratch` self-deleted before the failure it meant to set up."
 
-last_command: "cargo fmt --all -- --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test, cargo build --locked, the MSRV audit over cargo metadata, mandoc -T lint, and the credential-shaped-assignment scan"
+"macOS aarch64, rustc 1.98.1, after Phase 1.8 run loop and Phase 3.1-3.8: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 388 passed / 0 failed (326 lib incl. 100 safety patterns + 71 safety classifier + 40 context + 29 inference + 28 download + 20 registry + prompt tests, 14 integration, 28 tests/runtime.rs, 17 tests/safety.rs incl. the 10 000-command fuzz, 3 doc); `cargo build --locked` passed; MSRV audit over `cargo metadata --format-version 1 --locked` confirms all 65 locked packages declare rust-version <= 1.75. `cargo build --release --locked` FAILS BY DESIGN: build.rs refuses the placeholder model registry (see needs_human). `mandoc -T lint docs/gcode.1` clean. Secret scan clean apart from two reviewed false positives, both the same illustrative `grep -r 'token=' src/` example. CLI verified by hand: `--explain 'rm -rf /'` exits 0 with a CRITICAL explanation and no model; `--explain --json` emits one object; `-c` with no model exits 1 with an honest message; `--fix --explain ls` exits 2; `--version` exits 0. Eight defects were found and fixed by this work: `targets_for` returned `(path, command)` but was destructured as `(command, path)`, so taint never fired; the SQL matcher compared a whole quoted token against a single word; the home blocklist matched any path under `~`, over-blocking `rm -rf ~/Documents`; the coverage test compared list lengths instead of set equality; `classify_in_env` was over Clippy's 100-line limit; `needs_confirmation` implemented `config.rs`'s 'regardless of --yes', which would have made `--yes` unusable at the default MEDIUM threshold and contradicted the roadmap's own 3.7 test; the `Consenter` trait originally returned a bare yes, so a prompt returning an edited command would have had the core run the pre-edit string; and the first `run()` draft classified the natural-language request instead of the generated command"
+older_previous_last_verified: "macOS aarch64, rustc 1.98.1, after Phase 1.7: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 223 passed / 0 failed; `cargo build --locked` passed; MSRV audit clean over 65 locked packages; `mandoc -T lint docs/gcode.1` clean; secret scan clean; `cargo build --release --locked` failed by design on the placeholder registry"
+
+last_command: "cargo fmt --all -- --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test, cargo build --locked, cargo llvm-cov --summary-only, the MSRV audit over cargo metadata, cargo build --release --locked (fails by design), mandoc -T lint, the credential-shaped-assignment scan, and six CLI smoke runs"
 
 ```
 
@@ -180,7 +188,8 @@ last_command: "cargo fmt --all -- --check, cargo clippy --all-targets --all-feat
 2. `last_verified` records a command **that ran**, with its result. Never a
    belief. `cargo test: 87 passed` is real; `cargo test: probably fine` is not.
 3. `coverage_measured` is `null` until `cargo llvm-cov` has actually run. Do not
-   estimate it.
+   estimate it. It is now measured: `cargo-llvm-cov` and `llvm-tools-preview` are
+   installed in this environment.
 4. Move `next: true` to exactly one phase. If two are marked, the file is wrong.
 5. Never mark a phase `done` unless every acceptance criterion in
    `docs/ROADMAP.md` is ticked.

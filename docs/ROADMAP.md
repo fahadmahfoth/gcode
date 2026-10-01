@@ -329,12 +329,18 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
       prompts, and a leading prose line — one function, run before
       classification, so `safety` only ever sees the command
 - [x] 30-second wall-clock timeout; on timeout, return an error, never a
-      partial command
+      partial command. The timer is a real wall clock: the generation runs on a
+      detached thread that keeps the engine alive, so a stuck call cannot hold the
+      deadline. An earlier version used `thread::scope` and joined on the way out,
+      which meant the "timeout" was only reached after the engine returned — a
+      regression test pins the difference (old path ~55 ms against a 10 ms limit,
+      fixed path returns immediately)
 - [x] Output bounded at 8 KiB regardless of what `max_tokens` claims
 - [x] **Test:** `FakeEngine` returns a fixed string; pipeline consumes it
 - [x] **Test:** post-processing strips fences, tags, labels, and prose, and
       keeps a comment line and an unusual command word
-- [x] **Test:** a timeout produces an error, not a truncated command
+- [x] **Test:** a timeout produces an error, not a truncated command, and returns
+      at the deadline rather than after the engine finishes
 - [x] **Test:** zero `max_tokens`, zero timeout, and out-of-range `top_p` are
       refused before the engine is called; a runaway generation is refused
 
@@ -402,15 +408,20 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
       store yet, so there is nothing to snapshot. The prompt-side half is done:
       `context::redact` has 24 tests, including a canonical snapshot that asserts
       a synthetic `sk-…` value never reaches the prompt
-- [ ] Unit test coverage ≥ 80 % for the modules above — **not yet measured.**
-      `cargo llvm-cov` is not installed here, so this stays open rather than
-      ticked on a guess
+- [x] Unit test coverage ≥ 80 % for the modules above — measured with
+      `cargo llvm-cov`: `runtime.rs` 94.23 %, `ui/prompt.rs` 82.37 %,
+      `safety/patterns.rs` 98.33 %, `safety/classifier.rs` 99.20 %,
+      `safety/mod.rs` 100 %; workspace total 92.57 % of lines. The two below 100 %
+      are short-circuit right-hand sides the corpus does not exercise in both
+      directions, not unexecuted code: no line in `classifier.rs` is uncovered.
+      Getting `ui/prompt.rs` above 80 % required making its input and editor
+      injectable — see the note on 3.6
 
 ---
 
 ## Phase 2 — Shell integration & history
 
-**Status: ⬜ not started**
+**Status: 🚧 in progress — 2.1 done, 2.2–2.7 not started**
 **Goal: `gcode --fix` works because the tool knows what just failed.**
 
 ### 2.1 History storage — `src/context/history.rs`
@@ -422,18 +433,38 @@ One JSON object per line, append-only, `~/.gcode/history.jsonl`, mode `0600`.
 {"ts":1700000005,"cmd":"pytest -q","exit":1,"cwd":"/home/u/p","out":"ModuleNotFoundError: foo"}
 ```
 
-- [ ] `HistoryEntry { ts, cmd, exit, cwd, out }` with serde
-- [ ] `read_last(n)` reads **backwards** and stops — a 2 GB history file must not
-      be fully parsed to get 15 entries
-- [ ] A malformed line is skipped, not fatal; warn once on stderr
-- [ ] A torn final line (from a Ctrl-C) is silently discarded
-- [ ] `append()` is one `write` + `fsync` of a single line
-- [ ] Rotation at 10 MB: keep the newest 5 MB, suffix `.1`
-- [ ] Create the data dir with `umask 0077`
-- [ ] **Test:** read last 3 of 100 entries
-- [ ] **Test:** a corrupt line at position 50 does not stop the read
-- [ ] **Test:** a 10 MB fixture rotates and stays under the cap
-- [ ] **Test:** the file mode is `0600` after the first append
+- [x] `HistoryEntry { ts, cmd, exit, cwd, out }` with serde
+- [x] `read_last(n)` reads **backwards** and stops — a 2 GB history file must not
+      be fully parsed to get 15 entries. It seeks backwards a chunk at a time and
+      stops at the `n`-th newline, so the cost is the size of the tail, not of the
+      file
+- [x] A malformed line is skipped, not fatal; warn once on stderr
+- [x] A torn final line (from a Ctrl-C) is silently discarded
+- [x] `append()` is one `write` + `fsync` of a single line
+- [x] Rotation at 10 MB: keep the newest 5 MB, suffix `.1`
+- [x] Create the data dir with `umask 0077` — **done differently.** The store sets
+      the mode explicitly (`0700` on the directory, `0600` on the file) rather than
+      setting a process-global umask. A library that calls `umask` changes the mode
+      of every file the *host* process creates afterwards, which is not a decision a
+      history store gets to make on its own. Recorded in
+      [ADR 0017](adr/0017-explicit-file-modes-over-umask.md), which amends rule 6
+      of ADR 0005. It is stricter in one way: `umask` only affects files being
+      *created*, so a pre-existing `0644` file — from an older version, `touch`, or
+      a restored backup — stayed loose. The store tightens it on every append
+- [x] **Test:** read last 3 of 100 entries
+- [x] **Test:** a corrupt line at position 50 does not stop the read
+- [x] **Test:** a 10 MB fixture rotates and stays under the cap
+- [x] **Test:** the file mode is `0600` after the first append
+- [x] **Test, beyond the list above:** 100 concurrent appends produce intact lines;
+      a nested path creates its parents; an entry longer than the read chunk is
+      still found; and six failure-injection cases (a path whose parent is a regular
+      file, and a directory where the file should be) report `Error::History` rather
+      than a silent empty history. 29 tests in `src/context/history/tests.rs`
+
+**Not done, and deliberately so:** nothing reads or writes this store yet. The
+prompt does not consume history and no executor appends to it, because both are 2.3
+and Phase 4. Building the store first is what lets the shell hook be written against
+a tested format.
 
 ### 2.2 Environment context — `src/context/env.rs`
 
@@ -622,9 +653,14 @@ See [SAFETY.md](SAFETY.md) for the full model. This is the build list.
       pre-edit command while believing it reviewed the post-edit one. Rejection
       logic lives in `runtime.rs`, never in `ui/`, because a rule a UI can bypass
       is not a safety rule (ADR 0004)
-- [ ] …and loops back to the prompt. The current implementation returns the edit
-      for classification and ends the turn; a second edit in the same session is
-      open
+- [x] …and loops back to the prompt, so `e` can be repeated. The edited text is
+      re-classified *for display* and re-rendered before the question is asked
+      again, so the user cannot answer `y` to a command that is no longer the one on
+      screen. The core still classifies independently before acting. An edit that
+      fails, or produces an empty command, denies rather than falling back to the
+      original. 18 tests in `src/ui/prompt.rs`, reachable only after the prompt's
+      input and editor were made injectable — reaching them through a real terminal
+      or `std::env::set_var` was not an option
 - [ ] `c` copies to the clipboard — **not implemented, and deliberately
       declined.** Every clipboard path means shelling out to a platform tool
       (`pbcopy`, `xclip`, `wl-copy`), which is a dependency decision this
@@ -678,9 +714,13 @@ See [SAFETY.md](SAFETY.md) for the full model. This is the build list.
 
 ### Acceptance criteria
 
-- [ ] `safety/classifier.rs` has 100 % statement coverage — **not yet
-      measured**. `cargo llvm-cov` is not installed in this environment, so this
-      box stays open rather than ticked on a guess
+- [x] `safety/classifier.rs` has 100 % statement coverage — measured with
+      `cargo llvm-cov`: **no line in the file is uncovered**, and every function is
+      called. The 99.47 % region figure is seven short-circuit right-hand sides the
+      corpus never drives in both directions, not dead code. Getting here also
+      removed an `escalate` helper that had been left with no production caller
+      after an earlier taint branch was deleted — a function kept alive only by its
+      own unit test is unreferenced code, not covered code
 - [x] Every built-in blocklist pattern has a test; every pattern has a
       near-miss negative test (`tests/safety.rs`, plus a table/list equality test
       that fails the build if a row is added without one)

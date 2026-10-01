@@ -16,6 +16,25 @@ This rule is what keeps the documentation honest — see
 
 ### Added
 
+- `src/context/history.rs` (Phase 2.1): the JSONL history store. `HistoryEntry`,
+  backwards `read_last(n)` that seeks a chunk at a time and stops at the `n`-th
+  newline, single-`write` + `fsync` appends, stats, and rotation at 10 MiB keeping
+  the newest 5 MiB as `.1`. A malformed line is skipped with one warning however many
+  there are; a torn final line is discarded. 29 tests, including six that inject a
+  real IO failure and assert it surfaces as `Error::History` rather than as an empty
+  history. Nothing reads or writes it yet — the shell hook and the prompt wiring are
+  later phases.
+- `Prompt::reading` and `Prompt::editing` (Phase 3.6): the prompt's input and editor
+  are injectable. `ask` bailed on the first line whenever stdin was not a terminal,
+  which left the entire keymap — including re-classification after `e` — untestable.
+  18 tests now cover it.
+- [ADR 0017](docs/adr/0017-explicit-file-modes-over-umask.md), amending rule 6 of
+  ADR 0005: the history store sets `0700`/`0600` on its own two paths instead of
+  calling `umask`. A library that calls `umask` changes the mode of every file the
+  host process creates afterwards. The explicit form also tightens a pre-existing
+  `0644` file, which `umask` could not do.
+
+
 - `src/model/registry.rs` (Phase 1.3): the model registry, embedded from
   `models/registry.toml` with `include_str!` and parsed once into a `OnceLock`.
   There is no search path and no environment variable pointing at it, so a user
@@ -136,6 +155,29 @@ This rule is what keeps the documentation honest — see
 - `rust-toolchain.toml` pinning the stable channel plus `rustfmt` and `clippy`.
   The patch version is deliberately not pinned; the reason is in
   [docs/ROADMAP.md § Note on task 0.2](docs/ROADMAP.md#note-on-task-02).
+
+### Fixed
+
+- The inference timeout is now a real wall clock. Generation runs on a detached
+  thread that owns the engine, so a stuck call can no longer hold the deadline open
+  past it; the previous `thread::scope` version joined on the way out, so the
+  "timeout" was only reached after the engine returned anyway. A regression test pins
+  the difference.
+- `e` in the prompt loops back instead of ending the turn. The edited text is
+  re-classified for display and re-rendered before the question is asked again, so
+  `y` cannot answer for a command that is no longer on screen. A second `e` starts
+  from the first edit.
+- An injected `Prompt` writer no longer stops receiving output after the first
+  block. The writer was taken out of `self` and dropped at the end of each write, so
+  every later block silently fell through to stderr. Harmless with the real prompt,
+  which wants stderr anyway; it made the `r`, `?`, and `e` paths untestable.
+- A `--complete` run reported `mode: "generate"` in its output and in `--json`,
+  because `gate` passed the literal. The name now comes from the mode enum.
+- A failed `$EDITOR`, or one that saves an empty or whitespace-only file, is refused
+  rather than falling back to the pre-edit command. The trim-and-reject now sits
+  above the editor dispatch, so it applies to an injected editor too.
+- Removed an `escalate` helper in `src/safety/classifier.rs` that had no production
+  caller left, and the taint branch that could never fire.
 
 ### Changed
 
