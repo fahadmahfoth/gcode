@@ -10,11 +10,21 @@ available, how to add your own, and how to tune for your machine.
 Known models live in `models/registry.toml` at the repository root, created in
 Phase 1 per [ADR 0010](adr/0010-embed-the-model-registry.md). Each entry declares everything needed to fetch and verify it.
 
+> **The registry in this repository is a placeholder.** It holds one entry named
+> `placeholder-unverified` whose `sha256` is the SHA-256 of the empty string and
+> whose `url` points at a `.invalid` host, which RFC 2606 reserves and which can
+> never resolve. `build.rs` refuses a release build while that digest is present.
+> The structure, the validation, and the tests are real; the model is not. The
+> checksum has to come from someone who has downloaded the file and hashed it,
+> and it is listed as 🔒 in [ROADMAP.md § 1.3](ROADMAP.md#13-model-registry--srcmodelregistryrs-modelsregistrytoml).
+
+The shape of an entry, with the values below being illustrative rather than real:
+
 ```toml
 [[model]]
 name        = "kitty-bash-llm"
 description = "Small Bash-specialised model, the gcode default"
-url         = "https://huggingface.co/.../kitty-bash-llm-Q4_K_M.gguf"
+url         = "https://huggingface.co/OWNER/REPO/resolve/main/MODEL-Q4_K_M.gguf"
 sha256      = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 size_bytes  = 417_386_752
 default     = true
@@ -25,11 +35,12 @@ license     = "Apache-2.0"
 
 | Field | Meaning |
 |---|---|
-| `name` | What you pass to `--use-model` |
+| `name` | What you pass to `--use-model`. Lowercase, digits, `-` and `.` only |
 | `url` | Direct download URL, HTTPS only |
-| `sha256` | **Required.** A model without a pinned hash is refused |
+| `license` | **Required.** SPDX identifier; gcode must be able to say what a model is under |
+| `sha256` | **Required.** 64 lowercase hex characters. A model without a pinned hash is refused |
 | `size_bytes` | Shown before download so you can decline |
-| `default` | Exactly one entry may set this |
+| `default` | Exactly one entry may set this, or the build fails |
 | `context_size` | Native window; gcode clamps to `--context-size` |
 | `recommended_threads` | Hint used by `--use-model` |
 | `license` | Recorded for the credits screen and for legal clarity |

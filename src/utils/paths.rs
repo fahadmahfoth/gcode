@@ -305,6 +305,20 @@ fn home(overrides: &Overrides) -> Result<&Path> {
     overrides.home.as_deref().ok_or(Error::HomeDirUnavailable)
 }
 
+/// The config file path as a string, for embedding in an error message.
+///
+/// [`Error::ModelNameRequired`](crate::Error::ModelNameRequired) names the file
+/// a user has to edit, and a message that cannot say where that is sends them
+/// looking. Falls back to the conventional location rather than propagating: the
+/// error is already being reported, and a second failure would replace a useful
+/// message with a nested one.
+pub fn config_file_display() -> String {
+    config_file().map_or_else(
+        |_| ".config/gcode/config.toml".to_owned(),
+        |p| p.display().to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

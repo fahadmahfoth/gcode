@@ -83,6 +83,15 @@ clap = { version = "4.5", features = ["derive"] }
 # parser is where "unknown key silently ignored" comes from.
 toml = { version = "0.8", features = ["parse"] }
 serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.10"
+
+# The build script re-parses models/registry.toml to enforce ADR 0010's rules at
+# compile time. It needs the same parser the library does, so that a rule written
+# in build.rs and a rule in src/model/registry.rs cannot disagree about what the
+# file means. Same versions, same MSRV story.
+[build-dependencies]
+toml = { version = "0.8", features = ["parse"] }
+serde = { version = "1.0.229", features = ["derive"] }
 
 # No [dev-dependencies] yet. Every task that adds a test adds the fixtures it
 # needs in the same change. Tests use FakeEngine, never a real model.

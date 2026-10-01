@@ -1,0 +1,53 @@
+# The model registry — the single source of truth for what gcode will download.
+#
+# Embedded into the binary with include_str! (ADR 0010). There is no search path
+# and no environment variable pointing here: the registry is the binary, so a
+# user cannot end up with a registry newer than the tool that trusts it.
+#
+# Adding a model is a diff to this file. Nothing else in the repository has to
+# change, and `git log models/registry.toml` is the complete history of every
+# model gcode has ever been willing to download.
+#
+# ---------------------------------------------------------------------------
+# THIS FILE IS A PLACEHOLDER. DO NOT SHIP IT.
+# ---------------------------------------------------------------------------
+#
+# Every field below is filled with values that are syntactically valid and
+# deliberately useless:
+#
+#   sha256  the SHA-256 of the empty string. It is the well-known value of that
+#           literal, and it can never be the checksum of a 400 MB model file.
+#   url     an .invalid host, which RFC 2606 reserves and which can never resolve.
+#   name    says PLACEHOLDER in it, so a grep finds it.
+#
+# The reason it is here at all is that include_str! needs a file to exist, and a
+# missing one fails with "file not found" and no explanation. Shipping a
+# structurally valid file that says so is more useful than an absent one.
+#
+# build.rs refuses this digest in a release build, and refuses it with a message
+# saying why. Before any release, replace the entry below with a real model, and
+# verify the checksum by actually downloading the file once. A checksum copied
+# from a blog post is not a checksum; it is a rumour with a filename.
+#
+# The fields, once real:
+#
+#   name                  what the user types after --use-model; kebab-case
+#   description           one line for --list-models
+#   url                   direct HTTPS download URL
+#   sha256                lowercase hex, 64 characters, required
+#   size_bytes            shown before the download so it can be declined
+#   default               exactly one entry may set this
+#   context_size          native window, 512..=32768
+#   recommended_threads   a hint, never applied automatically
+#   license               SPDX identifier
+
+[[model]]
+name        = "placeholder-unverified"
+description = "PLACEHOLDER. Not a real model. Replaced before any release."
+url         = "https://models.invalid/placeholder-unverified.gguf"
+sha256      = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+size_bytes  = 1
+default     = true
+context_size = 4096
+recommended_threads = 1
+license     = "NONE-PLACEHOLDER"
