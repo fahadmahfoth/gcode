@@ -163,7 +163,12 @@ pub struct ContextConfig {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SafetyConfig {
-    /// The lowest risk that always prompts, regardless of `--yes`.
+    /// The lowest risk that prompts before running.
+    ///
+    /// `--yes` suppresses the prompt at every level, so this decides *which*
+    /// levels prompt in the first place rather than imposing a floor no flag can
+    /// lower. It previously read "regardless of `--yes`", which contradicted the
+    /// roadmap's `--yes` test and made the flag unusable at the default `MEDIUM`.
     pub always_confirm: Option<RiskLevel>,
     /// Commands refused unconditionally. Not overridable by any flag.
     pub blocklist: Option<Vec<String>>,

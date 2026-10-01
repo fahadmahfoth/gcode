@@ -82,4 +82,82 @@ pub enum Error {
          so that threshold can never be met; use HIGH or below"
     )]
     InvalidAlwaysConfirm,
+
+    /// The embedded model registry failed validation.
+    ///
+    /// Carries a rendered message rather than the `RegistryError` itself,
+    /// because the accessor hands back a `&'static` result and cannot lend out a
+    /// reference to a value it does not hold.
+    /// Inference failed or produced nothing usable.
+    ///
+    /// Carries a rendered message for the same reason [`Error::Registry`] does:
+    /// the accessor is behind a `OnceLock` and cannot lend out a reference to a
+    /// value it does not hold.
+    #[error("{message}")]
+    Inference {
+        /// The failure, already formatted for a terminal.
+        message: String,
+    },
+
+    /// The embedded model registry failed validation.
+    #[error("{message}")]
+    Registry {
+        /// The validation failure, already formatted for a terminal.
+        message: String,
+    },
+
+    /// Neither `--model` nor the config named a model, and none is the default.
+    ///
+    /// A distinct error rather than a silent fallback to the registry default,
+    /// because a user who asked for a specific model and did not get it must be
+    /// told, not handed a different one.
+    #[error(
+        "no model was named. Pass --model, or set `model` in {}, or pass --model \
+         with the full path to a local .gguf file",
+        crate::utils::paths::config_file_display()
+    )]
+    ModelNameRequired,
+
+    /// The command classified above `SAFE` and was not confirmed.
+    ///
+    /// Not [`Error::RiskBlocked`]: the command *can* run, it was not allowed to
+    /// this time. A script that distinguishes the two can retry with `--yes`,
+    /// and one that does not can still see the level in this message.
+    #[error("{level}: {} was not confirmed, so nothing ran", .level)]
+    ConsentDenied {
+        /// The level that needed consent.
+        level: crate::safety::Risk,
+    },
+
+    /// The command classified as `CRITICAL` and cannot run.
+    ///
+    /// Carries the reasons so the user learns *why* without running `--explain`.
+    /// There is no override, no flag, and no config key that reaches this
+    /// variant, which is the point (ADR 0008).
+    #[error("{level}, and this cannot be overridden:\n{}", .reasons.join("\n"))]
+    RiskBlocked {
+        /// The level, always `CRITICAL`.
+        level: crate::safety::Risk,
+        /// One line per reason the classifier matched.
+        reasons: Vec<String>,
+    },
+
+    /// A mode needs a model and no engine was supplied.
+    ///
+    /// A distinct error rather than a panic or an empty command: the honest
+    /// answer before the inference pipeline lands is "I have no model", not a
+    /// plausible command invented to look busy.
+    #[error(
+        "the generate and complete modes need a model, and none is loaded. \
+         Pass --model, or set `model` in {}, or run with --explain, which needs none",
+        crate::utils::paths::config_file_display()
+    )]
+    NoEngine,
+
+    /// A mode is parsed and validated but has no implementation yet.
+    #[error("the {mode} mode is parsed but not implemented yet")]
+    ModeNotWired {
+        /// The mode name, as a user would type it.
+        mode: String,
+    },
 }

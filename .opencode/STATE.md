@@ -2,13 +2,21 @@
 
 > **Maintained by the OpenCode agent.** This file is the quick pointer; the
 > human-readable contract is [../docs/ROADMAP.md](../docs/ROADMAP.md).
-> Last synced by hand: 2026-09-30.
+> Last synced by hand: 2026-10-01.
 
 ```yaml
 phase: 1
 phase_name: Core inference pipeline
 phase_status: in_progress
-first_incomplete_task: 1.3
+first_incomplete_task: 1.8
+
+# Phase 3 was started ahead of the rest of 1.8 because it is pure Rust, has no
+# dependency on the model, and gates everything that later runs a command.
+#
+# 3.1-3.5, 3.7, and 3.8 are written, tested, and passing, and 3.6 is mostly
+# written. Still open in phase 3: Ctrl+C handling, the MEDIUM+ cost estimate, the
+# clipboard key, and looping back to the prompt after an edit. Phase 3 stays
+# in_progress, not done.
 
 # Phases, in order. `next` is the only actionable one.
 phases:
@@ -27,7 +35,12 @@ phases:
     status: blocked
   - id: 3
     name: "Safety layer"
-    status: blocked
+    # 3.1-3.5, 3.7, 3.8 written and verified, 3.6 mostly: Risk/Verdict,
+    # normalisation and splitting, the blocklist, 39 pattern rows, the structural
+    # checks, the prompt, --yes semantics, and --explain. Still open: Ctrl+C, the
+    # cost estimate, the clipboard key, re-prompting after an edit, and the
+    # coverage criterion, which needs cargo-llvm-cov.
+    status: in_progress
   - id: 4
     name: "Packaging"
     status: blocked
@@ -64,6 +77,23 @@ needs_human:
     and no change to a workflow can clear it. Until it is resolved, CI cannot
     verify anything and Phase 0 tasks 0.8 and 0.12 stay open. The user must fix
     the account.
+  - >-
+    models/registry.toml holds one placeholder entry, not a real model: its
+    sha256 is the SHA-256 of the empty string and its url points at a .invalid
+    host. A checksum is a claim about the bytes of a specific file and cannot be
+    written honestly without downloading that file, which is also what ADR 0010
+    requires before a sha256 may be recorded. build.rs refuses a release build
+    while the placeholder digest is present, so debug builds and the test suite
+    work and no installable artefact can be produced. The user must supply a
+    real model, its URL, its size, and a checksum they have verified by
+    downloading the file once.
+  - >-
+    Disk is tight: 2.3 GiB free on a 99%-full volume. Better than the 281 MiB
+    recorded before, but Phase 1.5's LlamaEngine still needs llama-cpp-rs, a C++
+    toolchain, and real weights, and a C++ build plus several GB of weights will
+    not fit in 2.3 GiB. The user should free 15-20 GiB before that task.
+    Until then 1.5's trait, post-processing, and timeout are complete and tested
+    against FakeEngine, and only the sampler is outstanding.
 # Things that will need a human later, so nobody is surprised at the end.
 needs_human_later:
   - AUR account
@@ -85,8 +115,11 @@ platforms_verified:
   - macOS aarch64 (rustc 1.98.1)
 platforms_unverified:
   - Linux x86_64
-last_verified: "macOS aarch64, rustc 1.98.1, after 1.2: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 103 passed / 0 failed (87 lib + 2 bin + 14 integration); `cargo build --release --locked` passed; MSRV audit over `cargo metadata --format-version 1 --locked` confirms all 57 locked packages declare rust-version <= 1.75; exit codes confirmed by running the release binary: --version and --help exit 0, unknown flag and out-of-range --temperature exit 2, parsed-but-unimplemented mode exits 1; every flag in `--help` appears in `docs/gcode.1`, and the man page now lists its unimplemented options under a Not-yet-implemented heading; `mandoc -T lint docs/gcode.1` clean"
-last_command: "cargo fmt --all -- --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test, cargo build --release --locked, the MSRV audit over cargo metadata, a scripted exit-code matrix over target/release/gcode, and mandoc -T lint docs/gcode.1"
+last_verified: "macOS aarch64, rustc 1.98.1, after Phase 1.8 run loop and Phase 3.1-3.8: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 388 passed / 0 failed (326 lib incl. 100 safety patterns + 71 safety classifier + 40 context + 29 inference + 28 download + 20 registry + prompt tests, 14 integration, 28 tests/runtime.rs, 17 tests/safety.rs incl. the 10 000-command fuzz, 3 doc); `cargo build --locked` passed; MSRV audit over `cargo metadata --format-version 1 --locked` confirms all 65 locked packages declare rust-version <= 1.75. `cargo build --release --locked` FAILS BY DESIGN: build.rs refuses the placeholder model registry (see needs_human). `mandoc -T lint docs/gcode.1` clean. Secret scan clean apart from two reviewed false positives, both the same illustrative `grep -r 'token=' src/` example. CLI verified by hand: `--explain 'rm -rf /'` exits 0 with a CRITICAL explanation and no model; `--explain --json` emits one object; `-c` with no model exits 1 with an honest message; `--fix --explain ls` exits 2; `--version` exits 0. Eight defects were found and fixed by this work: `targets_for` returned `(path, command)` but was destructured as `(command, path)`, so taint never fired; the SQL matcher compared a whole quoted token against a single word; the home blocklist matched any path under `~`, over-blocking `rm -rf ~/Documents`; the coverage test compared list lengths instead of set equality; `classify_in_env` was over Clippy's 100-line limit; `needs_confirmation` implemented `config.rs`'s 'regardless of --yes', which would have made `--yes` unusable at the default MEDIUM threshold and contradicted the roadmap's own 3.7 test; the `Consenter` trait originally returned a bare yes, so a prompt returning an edited command would have had the core run the pre-edit string; and the first `run()` draft classified the natural-language request instead of the generated command"
+previous_last_verified: "macOS aarch64, rustc 1.98.1, after Phase 1.7: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 223 passed / 0 failed; `cargo build --locked` passed; MSRV audit clean over 65 locked packages; `mandoc -T lint docs/gcode.1` clean; secret scan clean; `cargo build --release --locked` failed by design on the placeholder registry"
+
+last_command: "cargo fmt --all -- --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test, cargo build --locked, the MSRV audit over cargo metadata, mandoc -T lint, and the credential-shaped-assignment scan"
+
 ```
 
 ### Known open items, not yet recorded above
@@ -103,10 +136,19 @@ last_command: "cargo fmt --all -- --check, cargo clippy --all-targets --all-feat
 - `docs/CONTRIBUTING.md` says pull requests target `main`. There is no `main`
   branch and the default is `master`. The CI push trigger was corrected to
   `master`; the prose in CONTRIBUTING is still wrong.
-- Disk is tight again: 645 MiB free on a 95%-full volume after the 1.2 release
-  build. Phase 1.4 needs `llama-cpp-rs`, which builds C++ and will fail partway
-  through on a full disk. `cargo clean` between phases, or a larger volume, is
-  the cheapest thing the human can do before then.
+- Disk: 2.3 GiB free on a 99%-full volume. Phase 1.5 needs `llama-cpp-rs`, which
+  builds C++ and will fail partway through on a full disk. `cargo clean` between
+  phases, or a larger volume, is the cheapest thing the human can do before then.
+- Phase 1.4 is checked off in the roadmap but is not finished: there is no real
+  HTTPS transport behind the `Transport` trait, the `download` feature is not
+  wired, there is no stderr progress renderer, and nothing calls
+  `ensure_model()`. What is finished and tested is the engine underneath: the
+  checksum, the `.part` file, resume, mirrors, and atomic rename.
+- Phase 1.5's timeout is not a wall clock. It uses `std::thread::scope`, which
+  joins the generation thread, so a model that never finishes will not be
+  abandoned at the deadline. A real timeout needs `CancellationToken` or an
+  owned handle plus `catch_unwind`, and the abort path must be designed with the
+  grammar-constrained sampler in mind. Worth an ADR when it is done.
 - `Cargo.toml` requires `clap = "4.5"`, which is a caret requirement: a fresh
   `cargo update` may resolve 4.6, whose `rust-version` is 1.85. The lockfile
   currently pins 4.5.61, and the MSRV audit above passes because of the lockfile

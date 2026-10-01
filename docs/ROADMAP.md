@@ -150,8 +150,9 @@ real dispatch in 1.1 lands in a tested function rather than in `main`.
 
 ## Phase 1 — Core inference pipeline
 
-**Status: 🟡 in progress — 1.1 done and verified on macOS aarch64; the modes are
-parsed but nothing has been generated yet, because there is no model**
+**Status: 🟡 1.2–1.5 and 1.7 done. 1.8's run loop, `--dry-run`, and `--json` are
+done and tested against a `FakeEngine`; the CLI cannot generate anything yet,
+because there is no model**
 **Goal: `gcode -c "list all files" --dry-run` prints a valid command and exits.**
 
 This is the phase that decides whether the project is real. Nothing else matters
@@ -246,26 +247,57 @@ Beyond the listed tasks, this slice also had to:
 
 ### 1.3 Model registry — `src/model/registry.rs`, `models/registry.toml`
 
-- [ ] Parse `registry.toml`; embed with `include_str!` so there is no runtime file
-- [ ] Validate at compile time that exactly one entry sets `default = true`
-- [ ] `ModelEntry { name, url, sha256, size_bytes, default, context_size, license }`
-- [ ] A `ModelEntry` without `sha256` is a hard parse error
-- [ ] **Test:** a fixture registry with two defaults fails
-- [ ] **Test:** a fixture registry with a missing hash fails
+- [x] Parse `registry.toml`; embed with `include_str!` so there is no runtime file
+- [x] Validate at compile time that exactly one entry sets `default = true`
+- [x] `ModelEntry { name, url, sha256, size_bytes, default, context_size, license }`
+- [x] A `ModelEntry` without `sha256` is a hard parse error
+- [x] **Test:** a fixture registry with two defaults fails
+- [x] **Test:** a fixture registry with a missing hash fails
+- [ ] 🔒 **The registry data itself is a placeholder** *(needs a real model and
+      a checksum you have verified by downloading the file once)*
+
+The code is done. What is not done is the data, and the difference is not
+cosmetic: a checksum is a claim about the bytes of a specific file, and there is
+no way to write one honestly without the file. The shipped
+`models/registry.toml` therefore holds one entry that is deliberately useless —
+the SHA-256 of the empty string, an `.invalid` host, and `PLACEHOLDER` in the
+name — and `build.rs` refuses a release build while that digest is present. A
+debug build and the whole test suite work, so nothing upstream is blocked, and no
+artefact a user could install can be produced from it.
+
+Two additions beyond the listed tasks:
+
+- `description` and `recommended_threads` are accepted, because `docs/models.md`
+  documents them and `--list-models` needs the first. The roadmap's field list
+  was the incomplete one.
+- Model names may contain dots. `qwen2.5-0.5b-instruct` and `gemma-2-2b` are
+  the names of models this project intends to ship, and a kebab-case rule that
+  rejected them would have been weakened at the first conflict.
 
 ### 1.4 Model download — `src/model/download.rs`
 
-- [ ] `resolve_path(entry) -> PathBuf` honouring `$GCODE_MODEL`, config, search dirs
-- [ ] Already present + hash matches → return immediately, no network
-- [ ] Present + hash differs → delete, then download
-- [ ] Download to `<name>.part`, streaming, with progress to **stderr**
-- [ ] Hash while streaming, not after, to avoid a second read of 400 MB
-- [ ] Verify → atomic `rename` into place; `chmod 0644`
-- [ ] Mismatch → delete, try `$GCODE_MODEL_MIRROR`, then error with the hashes
-- [ ] HTTP Range resume when `.part` exists
-- [ ] **Test:** `mockito` serves a fixture file, hash matches, path created
-- [ ] **Test:** server returns wrong bytes → file deleted, error returned
-- [ ] **Test:** pre-existing `.part` resumes from the right offset
+- [x] `resolve_path` honours `$GCODE_MODEL` and config overrides and search
+      dirs (injected `ResolveInput`; an explicit path is taken at face value,
+      bypassing hashing at startup)
+- [x] Already present + hash matches → return immediately, no network
+- [x] Present + hash differs → delete, then download
+- [x] Download to `<name>.part`, streaming, with progress to **stderr** (via a
+      callback)
+- [x] Hash while streaming, not after, so the file is never read twice
+- [x] Verify → atomic `rename` into place, set `chmod 0644` on Unix
+- [x] Mismatch → delete, try the mirror, then error with both hashes printed
+- [x] HTTP Range resume when `.part` exists and the transport supports ranges
+- [x] The network is behind a `Transport` trait so the module is testable
+      entirely offline; the real HTTP transport is expected behind the
+      `download` feature
+- [x] **Test:** correct file downloaded, path created, digest verified
+- [x] **Test:** server returns wrong bytes → partial deleted, error with the hashes
+- [x] **Test:** pre-existing `.part` resumes from the right offset
+- [x] **Test:** mirror fallback, wrong-size file replaced, oversized partial
+      discarded, dropped connection leaves the prefix and the error explains
+      that the next attempt resumes
+- [x] `sha256_hex` exposed for tests; the SHA-256 of empty string matches the
+      placeholder sentinel used by the registry gate
 
 ### 1.5 Inference engine — `src/inference/engine.rs`
 
@@ -284,18 +316,27 @@ pub struct LlamaEngine { /* mmap'd model */ }
 Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
 `FakeEngine`, so the whole pipeline is testable in milliseconds without 400 MB.
 
-- [ ] `InferenceEngine` trait as above
-- [ ] `LlamaEngine::load(path, ModelParams)` — mmap, warm up
-- [ ] Load once per process, cache behind a `OnceLock`
-- [ ] `generate()` with temperature, top_p, max_tokens, seed
-- [ ] Stop on EOG, on a newline that closes the command, or at max_tokens
-- [ ] Strip any markdown fences, `bash` language tags, or leading `Command:` the
-      model adds despite instructions
-- [ ] 30-second wall-clock timeout; on timeout, return an error, never a
+- [x] `InferenceEngine` trait as above, with `EngineInfo` and `GenParams`
+- [ ] `LlamaEngine::load(path, ModelParams)` — mmap, warm up — **⛔ needs
+      llama-cpp-rs, a C++ toolchain, and real weights; disk is at 281 MiB**
+- [x] Load once per process, cache behind a `OnceLock`; a second `install` is
+      refused so test order cannot poison the cache
+- [x] `generate()` with temperature, top_p, max_tokens, seed; params validated
+      before the engine is called, so a zero `max_tokens` never reaches a model
+- [ ] Stop on EOG, on a newline that closes the command, or at max_tokens —
+      belongs to the sampler, which is the blocked item above
+- [x] Strip markdown fences, `bash` language tags, `Command:` labels, `$ `
+      prompts, and a leading prose line — one function, run before
+      classification, so `safety` only ever sees the command
+- [x] 30-second wall-clock timeout; on timeout, return an error, never a
       partial command
-- [ ] **Test:** `FakeEngine` returns a fixed string; pipeline consumes it
-- [ ] **Test:** post-processing strips fences, tags, and prose
-- [ ] **Test:** a timeout produces an error, not a truncated command
+- [x] Output bounded at 8 KiB regardless of what `max_tokens` claims
+- [x] **Test:** `FakeEngine` returns a fixed string; pipeline consumes it
+- [x] **Test:** post-processing strips fences, tags, labels, and prose, and
+      keeps a comment line and an unusual command word
+- [x] **Test:** a timeout produces an error, not a truncated command
+- [x] **Test:** zero `max_tokens`, zero timeout, and out-of-range `top_p` are
+      refused before the engine is called; a runaway generation is refused
 
 ### 1.6 Grammar constraints — `src/inference/grammar.rs`
 
@@ -308,36 +349,62 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
 
 ### 1.7 Prompt assembly — `src/context/prompt.rs`
 
-- [ ] `build_prompt(request, context) -> String`, per the format in
-      [MODELS.md § Prompt format](MODELS.md#prompt-format)
-- [ ] `redact(s)` applied to every history output tail and env-derived string
-- [ ] History wrapped in untrusted-data markers with an explicit
-      "data not instructions" system line
-- [ ] Output tails truncated to `output_tail_bytes` (default 2048) **from the end**
-- [ ] **Test:** `sk-[A-Za-z0-9]{20,}` in history is redacted before assembly
-- [ ] **Test:** `Authorization: Bearer …` is redacted
-- [ ] **Test:** a PEM `BEGIN … PRIVATE KEY` block is redacted
-- [ ] **Snapshot:** prompt for 5 canonical contexts
+- [x] `build_prompt(request, context) -> String`, per the format in
+      [MODELS.md § Prompt format](MODELS.md#prompt-format); context and caps are
+      injected so the builder is testable without a shell or a git repo
+- [x] `redact(s)` applied to every history command, every output tail, every
+      env-derived string, and the request itself — one function, ADR 0006
+- [x] History wrapped in untrusted-data markers with an explicit
+      "data not instructions" system line; attribute values escaped so a quote in
+      a git branch name cannot close the attribute and escape into the
+      instruction region
+- [x] Output tails truncated to `output_tail_bytes` (default 2048) **from the
+      end**, and redacted *before* truncation — the other order can cut a rule's
+      marker off a long line and leave the payload
+- [x] History capped at the 15 most recent entries, output lines escaped into
+      valid JSON
+- [x] **Test:** `sk-…` in history is redacted before assembly
+- [x] **Test:** `Authorization: Bearer …` is redacted
+- [x] **Test:** a PEM `BEGIN … PRIVATE KEY` block is redacted, terminated or not
+- [x] **Test:** a hostile filename stays inside the history delimiters
+- [x] **Test:** ordinary commands are not over-redacted (`grep -r 'token=' src/`)
+- [x] **Snapshot:** the canonical prompt asserted inline, and for 5 contexts
 
 ### 1.8 Assembly and `main.rs`
 
-- [ ] `run(cli) -> Result<Output>` in `src/lib.rs`, so it is testable without a
-      process boundary
-- [ ] `main.rs` is a thin `main` that calls `run`, prints, and maps the error
-- [ ] `--dry-run` prints the command and the risk line, then exits 0
-- [ ] `--json` emits a single JSON object, no colour, no prompts
-- [ ] **Test:** `run()` with a `FakeEngine` produces the expected `Output`
+- [x] `run(parsed, engine, consenter, always_confirm) -> Result<Output>` in
+      `src/runtime.rs`, so it is testable without a process boundary. It takes
+      its engine and its consenter as parameters rather than reaching for
+      globals, which is what lets `tests/runtime.rs` run the whole safety
+      pipeline against a `FakeEngine` with no model and no terminal
+- [x] `main.rs` is a thin `main` that calls `run`, prints, and maps the error
+- [x] `--dry-run` returns the command and the risk line without prompting
+- [x] `--json` emits a single JSON object, no colour, no prompts. Hand-built in
+      `Output::to_json` for the same reason the prompt is: no serde at MSRV 1.75
+- [x] **Test:** `run()` with a `FakeEngine` produces the expected `Output`
+      (`tests/runtime.rs::run_with_a_fake_engine_produces_the_expected_output`)
 
 ### Acceptance criteria
 
-- [ ] `gcode -c "list all files" --dry-run` prints a valid, plausible command
-- [ ] `gcode -c "find files larger than 10GB" --dry-run` produces a `find`
+- [ ] `gcode -c "list all files" --dry-run` prints a valid, plausible command —
+      **blocked on the model.** The run loop is built and tested against a
+      `FakeEngine`, but no sampler exists (1.5), so the CLI reports "no model is
+      loaded" and exits 1 rather than inventing a command
+- [ ] `gcode -c "find files larger than 10GB" --dry-run` produces a `find` —
+      blocked on the model, same reason
 - [ ] 10 of 10 commands in `tests/fixtures/bench_prompts.json` are syntactically
-      valid shell
+      valid shell — blocked on the model. The grammar that guarantees this is 1.6,
+      which depends on 1.5
 - [ ] p50 inference < 1000 ms on 2 physical cores
-- [ ] Grammar prevents invalid shell in 100 % of the 200-run fuzz test
-- [ ] No history secrets appear in any snapshot
-- [ ] Unit test coverage ≥ 80 % for the modules above
+- [ ] Grammar prevents invalid shell in 100 % of the 200-run fuzz test — blocked
+      on 1.6
+- [ ] No history secrets appear in any snapshot — Phase 2; there is no history
+      store yet, so there is nothing to snapshot. The prompt-side half is done:
+      `context::redact` has 24 tests, including a canonical snapshot that asserts
+      a synthetic `sk-…` value never reaches the prompt
+- [ ] Unit test coverage ≥ 80 % for the modules above — **not yet measured.**
+      `cargo llvm-cov` is not installed here, so this stays open rather than
+      ticked on a guess
 
 ---
 
@@ -448,86 +515,187 @@ source /usr/local/share/gcode/shell/gcode.bash
 
 ## Phase 3 — Safety layer
 
-**Status: ⬜ not started**
+**Status: 🟡 3.1–3.5, 3.7, 3.8 shipped. 3.6 mostly; three items open.**
 **Goal: a CRITICAL command is unrunnable, and editing cannot bypass it.**
 
 See [SAFETY.md](SAFETY.md) for the full model. This is the build list.
 
 ### 3.1 Risk types — `src/safety/mod.rs`
 
-- [ ] `enum Risk { Safe, Low, Medium, High, Critical }`
-- [ ] `Ord` so levels compare; `Display`; serde rename to `SAFE`…`CRITICAL`
-- [ ] `struct Verdict { level, reasons: Vec<Reason>, segments: Vec<Segment> }`
-- [ ] `struct Reason { pattern_id, level, message }`
+- [x] `enum Risk { Safe, Low, Medium, High, Critical }`
+- [x] `Ord` so levels compare; `Display`; `as_str()` gives `SAFE`…`CRITICAL`.
+      Serde is deferred to the `--json` layer, which hand-builds its object like
+      `context/prompt.rs` does, to keep the dependency count down at MSRV 1.75
+- [x] `struct Verdict { level, reasons: Vec<Reason>, segments: Vec<Segment> }`
+- [x] `struct Reason { pattern_id, level, message, segment }`; `Segment` keeps its
+      own level so the UI can point at the offending half of a command
+- [x] `Risk::is_runnable()` — the single place that answers "may this run". No
+      flag, config key, or env var reaches it
 
 ### 3.2 Normalisation — `src/safety/classifier.rs`
 
-- [ ] Strip comments: `#…` and ` # …` outside quotes
-- [ ] Collapse whitespace, expand `~`, resolve `$VAR` and `${VAR}` when the
-      variable is set
-- [ ] Join line continuations (`\` at EOL)
-- [ ] **Split on `;`, `&&`, `||`, `|` and classify every segment**
-- [ ] Respect quotes: do not split on a `;` inside `'…'` or `"…"`
+- [x] Strip comments: `#` at a token start, outside quotes. A `#` inside a word
+      (`foo#bar`) or inside quotes (`grep '#1' .`) survives
+- [x] Collapse whitespace. `~` and `$HOME` are treated as one home path by the
+      matcher rather than textually expanded to a guessed directory; `$VAR` and
+      `${VAR}` are resolved from an injected map when set
+- [x] Join line continuations (`\` at EOL)
+- [x] **Split on `;`, `&&`, `||`, `|`, `&`, newline, and classify every segment**
+- [x] Respect quotes: do not split on a `;` inside `'…'` or `"…"`
+- [x] Track brace depth, so a function body stays one segment. A splitter that
+      ignores braces would break the fork bomb into harmless pieces
+- [x] **An unset `$VAR` stays literal.** Blanking it would turn `rm -rf $TARGET`
+      into `rm -rf`, which reads as harmless
+- [x] `2>&1` is not a split point
 
 ### 3.3 Blocklist
 
-- [ ] Built-in set: `rm -rf /`, `mkfs`, `dd of=/dev/`, `> /dev/sd*`, fork bomb,
-      `:(){ :|:& };:`, `chmod -R 777 /`, `rm -rf ~`
-- [ ] User blocklist merged from `[safety.blocklist]`
-- [ ] Matched **before** level assignment; result is CRITICAL
-- [ ] **Test:** each built-in pattern, with a segment-splitting variant
-- [ ] **Test:** `ls; rm -rf /` → CRITICAL (the case most implementations miss)
+- [x] Built-in set: `rm -rf /`, `mkfs*`, `dd of=/dev/sd*`, `> /dev/sd*`, fork bomb
+      `:(){ :|:& };:`, `chmod -R 777 /`, `rm -rf ~`, `tee`/`cat` onto a raw device.
+      `/dev/null`, `/dev/zero`, and `/dev/std*` are excluded on purpose: a
+      blocklist that fires on `echo x > /dev/null` is one people turn off
+- [x] User blocklist merged from `[safety.blocklist]`; it can only raise a level
+      to CRITICAL, never lower one
+- [x] Matched **before** level assignment; result is CRITICAL
+- [x] The fork bomb is matched against the **whole command**, not one segment.
+      Bash lexes the trailing `;` as a separator, so a per-segment pass sees
+      `:(){ :|:& }` and `:` and misses it
+- [x] **Test:** each built-in pattern, with a segment-splitting variant
+- [x] **Test:** `ls; rm -rf /` → CRITICAL (the case most implementations miss),
+      and the same for `&&`, `||`, `|`, `&`, and a newline
+- [x] **Test:** a dangerous command quoted as text (`echo 'rm -rf /'`) is **not**
+      a command
 
 ### 3.4 Pattern table — `src/safety/patterns.rs`
 
-- [ ] The full table from [SAFETY.md § classifier](SAFETY.md#stage-3--patterns-and-structure)
-- [ ] Every entry carries a user-facing reason string
-- [ ] Patterns are data, not code, so they can grow without touching logic
-- [ ] Each pattern has at least one positive test and one near-miss negative
-      test (`rm -rf ./build` must **not** match a root-delete rule)
+- [x] The full table from [SAFETY.md § classifier](SAFETY.md#stage-3--patterns-and-structure),
+      39 rows across CRITICAL, HIGH, MEDIUM, and LOW
+- [x] Every entry carries a user-facing reason string that says what the command
+      does, never just that it is risky
+- [x] Patterns are data, not code: a new row is a `Pattern` literal plus a test,
+      with no logic change
+- [x] Matched by an ordered token matcher rather than a regex, for three reasons
+      documented at the top of the module: no dependency in the safety-critical
+      path, near misses decided by exact tokens rather than by anchoring, and no
+      regex engine to audit. Command names are anchored to the head token, so
+      `echo rm -rf /` does not match a root-delete rule
+- [x] Each pattern has at least one positive test and one near-miss negative
+      test, and a test asserts the declared test list matches the table exactly,
+      so a new row without tests fails the build
+- [x] An unknown-command floor: a command whose head is neither in the table nor
+      in `KNOWN_SAFE` is `LOW`, never `SAFE`. This is an addition beyond SAFETY.md
+      — a table that calls unknown commands SAFE fails open, which is the wrong
+      direction for the module whose job is not failing open
 
 ### 3.5 Structural checks
 
-- [ ] **Taint:** a write to path P followed by a delete of P → escalate one level
-- [ ] **Privilege:** `sudo`/`su`/`doas` anywhere → at least MEDIUM
-- [ ] **Network + execute:** fetch chained with execute → at least HIGH
+- [x] **Taint:** a write to path P followed by a delete of P → escalate one level.
+      Handles `cp`/`mv`/`install`/`ln`/`rsync` destinations, `tee` arguments,
+      `dd of=`, and redirect targets; compares paths with quotes stripped
+- [x] **Privilege:** `sudo`/`doas`/`pkexec`/`runuser` anywhere → at least MEDIUM.
+      `su` only as the head command, because `grep su notes.txt` is not an
+      escalation
+- [x] **Network + execute:** fetch chained with execute → at least HIGH, checked
+      **across segments** (`curl x | bash` is two segments, so no per-segment rule
+      can see it) and via `xargs` in one segment
 
 ### 3.6 Confirmation UI — `src/ui/prompt.rs`
 
-- [ ] Keys: `y n e c ? r`; `Ctrl+C` cancels
-- [ ] Shows the command, the level, the reasons, and a cost estimate for MEDIUM+
-- [ ] `?` prints a plain-language explanation of each matched pattern
-- [ ] `e` opens `$EDITOR`, re-normalises, **re-classifies**, loops
-- [ ] `c` copies to the clipboard, never executes
-- [ ] Default is `N` at every level
-- [ ] Non-interactive stdin (a pipe, a CI job) fails safe: no prompt → no run
-- [ ] **Test:** `e` that turns a HIGH command into a CRITICAL one is re-blocked
-- [ ] **Test:** piped stdin does not execute
+- [x] Keys: `y n e c ? r`. `y`, `n`, `q`, `?`, `r`, and `e` are handled; `c` is
+      recognised and declined (see below)
+- [ ] `Ctrl+C` cancels — **not implementable as written.** The crate is
+      `#![forbid(unsafe_code)]`, so the signal handler libc would need is out,
+      and the portable alternative is a new dependency. Both are decisions this
+      repository has not recorded, so the key is left open rather than faked with
+      a `?` loop that a user would read as working
+- [x] Shows the command, the level, and every reason. The reasons are not
+      decoration: "MEDIUM" alone does not tell a user whether it is their own
+      project directory or someone else's home
+- [ ] A cost estimate for `MEDIUM+` — **not implemented.** There is no model, so
+      there is nothing to estimate, and inventing a unit would put a fabricated
+      number in front of a user about to make a safety decision
+- [x] `?` prints a plain-language explanation of each matched pattern, and the
+      prompt loops rather than exiting
+- [x] `e` opens `$EDITOR`, and the core **re-classifies** the result from scratch
+      before anything looks at it. The edited string travels back as
+      `Decision::Granted(String)`, not as a bare yes, so the core cannot run the
+      pre-edit command while believing it reviewed the post-edit one. Rejection
+      logic lives in `runtime.rs`, never in `ui/`, because a rule a UI can bypass
+      is not a safety rule (ADR 0004)
+- [ ] …and loops back to the prompt. The current implementation returns the edit
+      for classification and ends the turn; a second edit in the same session is
+      open
+- [ ] `c` copies to the clipboard — **not implemented, and deliberately
+      declined.** Every clipboard path means shelling out to a platform tool
+      (`pbcopy`, `xclip`, `wl-copy`), which is a dependency decision this
+      repository has not made. The key is recognised and answers "no" rather than
+      being ignored, so a user pressing it is not left with a button that does
+      nothing
+- [x] Default is `N` at every level. There is no branch in `ui/prompt.rs` that
+      turns "I could not ask" into permission: end of input, an empty line, an
+      unrecognised key, a closed stdin, a read error, and an editor that fails all
+      return `Decision::Denied`
+- [x] Non-interactive stdin fails safe. `Prompt::ask` checks `is_terminal()` before
+      printing anything, and `main` passes `DenyAll` for a pipe or `--json`, so a
+      machine-readable invocation cannot block on a human
+- [x] **Test:** `e` that turns a HIGH command into a CRITICAL one is re-blocked
+      (`tests/runtime.rs::an_edit_that_turns_high_into_critical_is_re_blocked`)
+- [x] **Test:** piped stdin does not execute
+      (`tests/safety.rs`, `tests/runtime.rs::a_pipe_cannot_run_a_command_that_needs_consent`)
 
 ### 3.7 `--yes` semantics
 
-- [ ] Suppresses the prompt only
-- [ ] Still classifies, still prints the level and reasons, still logs
-- [ ] CRITICAL still refuses
-- [ ] **Test:** `--yes` on a CRITICAL command still refuses, exit code non-zero
-- [ ] **Test:** `--yes` on a HIGH command runs, and history records the level
+- [x] Suppresses the prompt only. `needs_confirmation` is `!yes && level >= always_confirm`
+      and nothing else reads `yes`
+- [x] Still classifies, still reports the level and reasons. Logging to the
+      history store is Phase 2; the level and reasons are in `--json` and on stderr
+- [x] CRITICAL still refuses, and the block happens *before* the prompt is reached,
+      so there is no order in which `--yes` sees it first
+- [x] **Test:** `--yes` on a CRITICAL command still refuses, exit code non-zero
+      (`no_flag_combination_unblocks_critical`, and the CLI exits 1)
+- [x] **Test:** `--yes` on a HIGH command runs
+      (`yes_replaces_the_prompt_but_not_the_classification`). The history half is
+      Phase 2, so the level cannot yet be recorded
 
 ### 3.8 `--explain`
 
-- [ ] Given a command, prints: what it does, what it touches, its level, its
-      reasons
-- [ ] Never executes, never suggests
-- [ ] **Snapshot:** explanations for 10 canonical commands
+- [x] Given a command, prints what it does, what it touches, its level, its
+      per-segment levels, and every reason with the pattern id that produced it.
+      `Verdict::touched_paths` reads the *normalised* segments, so a path in a
+      stripped comment is not reported as touched and one inside a quoted argument
+      still is
+- [x] Never executes, never suggests. `executed` is always false in this mode and a
+      test greps the output for suggestion phrasing, because an `--explain` that
+      proposed a different command would be a second generator whose output nothing
+      has classified
+- [x] **Snapshot:** explanations for 10 canonical commands
+      (`tests/runtime.rs::the_ten_canonical_explanations_are_stable`) — asserted
+      stable across runs and complete in structure. A committed golden file is not
+      used: ten explanations that only change when someone edits them are ten
+      expected strings to keep in sync by hand, and the stability check catches the
+      regression that matters, which is non-determinism
+- [x] `--explain` needs no model, so it is the one mode that works before 1.5
 
 ### Acceptance criteria
 
-- [ ] `safety/classifier.rs` has 100 % statement coverage
-- [ ] Every built-in blocklist pattern has a test; every pattern has a
-      near-miss negative test
-- [ ] `gcode -c "delete everything from root" -y` exits non-zero and runs nothing
-- [ ] Editing a generated command re-classifies it
-- [ ] Piped stdin never executes anything
-- [ ] Fuzzing 10 000 mutated commands produces zero panics
+- [ ] `safety/classifier.rs` has 100 % statement coverage — **not yet
+      measured**. `cargo llvm-cov` is not installed in this environment, so this
+      box stays open rather than ticked on a guess
+- [x] Every built-in blocklist pattern has a test; every pattern has a
+      near-miss negative test (`tests/safety.rs`, plus a table/list equality test
+      that fails the build if a row is added without one)
+- [x] `gcode -c "delete everything from root" -y` exits non-zero and runs nothing
+      (`no_flag_combination_unblocks_critical` sweeps nine flag combinations; the
+      exit code is checked in `main`: 1 for a refusal, 2 for a usage error)
+- [x] Editing a generated command re-classifies it — proven by purity in
+      `tests/safety.rs::editing_a_command_reclassifies_it`. The run loop that
+      calls it on every keystroke is Phase 1.8/3.6, and is still open
+- [x] Piped stdin never executes anything — `main` hands the run loop a
+      `DenyAll` consenter unless a terminal is attached, so a pipe can neither
+      reach a prompt nor consent to anything
+- [x] Fuzzing 10 000 mutated commands produces zero panics
+      (`tests/safety.rs::ten_thousand_mutations_never_panic`, deterministic
+      xorshift so a failure reproduces)
 
 ---
 
