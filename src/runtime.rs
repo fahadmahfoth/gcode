@@ -94,8 +94,46 @@ pub fn run(
     consenter: &mut dyn Consenter,
     always_confirm: Risk,
 ) -> Result<Output> {
+    run_configured(
+        parsed,
+        &crate::config::defaults(),
+        engine,
+        consenter,
+        always_confirm,
+        None,
+        None,
+    )
+}
+
+/// [`run`] with the resolved config and an optional download transport.
+///
+/// `main` calls this, because the download mode needs the config it already
+/// loaded and an HTTP client it chooses by feature. The plain [`run`] keeps its
+/// old signature for tests and passes no transport, so a test can never reach
+/// the network by accident.
+///
+/// # Errors
+///
+/// The same errors [`run`] returns, plus the download errors: a model the
+/// registry does not have, a build without the `download` feature, and a
+/// transfer that fails or does not match its digest.
+#[allow(clippy::too_many_arguments)]
+pub fn run_configured<'a>(
+    parsed: &Parsed,
+    config: &'a crate::config::EffectiveConfig,
+    engine: Option<Arc<dyn InferenceEngine>>,
+    consenter: &mut dyn Consenter,
+    always_confirm: Risk,
+    transport: Option<&'a dyn crate::model::download::Transport>,
+    on_progress: Option<&'a mut dyn FnMut(u64, u64)>,
+) -> Result<Output> {
     match &parsed.mode {
         Mode::Explain { command } => Ok(explain(command, parsed)),
+        Mode::ListModels => list_models(),
+        Mode::DownloadModel { name } => {
+            let models_dir = crate::utils::paths::models_dir()?;
+            download_model(name.as_deref(), config, &models_dir, transport, on_progress)
+        }
         Mode::Generate { request } => {
             let engine = engine.ok_or(Error::NoEngine)?;
             let params = GenParams::default();
@@ -129,6 +167,128 @@ pub fn run(
             mode: parsed.mode.to_string(),
         }),
     }
+}
+
+/// Implements `--list-models`: the embedded registry as a table.
+///
+/// Needs no model, no network, and no consent, so it is usable on a fresh
+/// install. The table is carried in `explanation`, because this mode produces no
+/// command; `main` prints the explanation when the command is empty.
+///
+/// # Errors
+///
+/// [`Error::Registry`] if the embedded registry fails validation, which
+/// `build.rs` is meant to make unreachable.
+fn list_models() -> Result<Output> {
+    let registry = crate::model::registry::registry()?;
+    Ok(Output {
+        command: String::new(),
+        level: Risk::Safe,
+        mode: Mode::ListModels.to_string(),
+        reasons: Vec::new(),
+        segments: Vec::new(),
+        explanation: Some(registry.table()),
+        executed: false,
+    })
+}
+
+/// The registry as the JSON array `--list-models --json` prints.
+///
+/// A list is an array, not the single object [`Output::to_json`] emits, so this
+/// is a separate renderer rather than a field on `Output`. `main` selects it by
+/// mode, which is where the `--json` branch already lives.
+///
+/// # Errors
+///
+/// [`Error::Registry`] if the embedded registry fails validation.
+pub fn list_models_json() -> Result<String> {
+    Ok(crate::model::registry::registry()?.to_json())
+}
+
+/// Implements `--download-model`: fetch a registry model and verify its digest.
+///
+/// Needs no engine and no consent. It is idempotent: a file already present and
+/// correct is not touched, and a file that hashes to something else is deleted
+/// before a retry, both of which live in [`crate::model::download::ensure`].
+///
+/// The transport is injected rather than constructed here so the whole path is
+/// exercised by a fake in tests, and so a build without the `download` feature
+/// reaches [`Error::DownloadUnavailable`] instead of a silent no-op.
+///
+/// # Errors
+///
+/// [`Error::DownloadRefused`] when `no_model` is set,
+/// [`Error::DownloadUnavailable`] when no transport was supplied,
+/// [`Error::UnknownModel`] when the name is not in the registry,
+/// [`Error::Registry`] when the embedded registry fails validation, and
+/// [`Error::Download`] when the transfer fails or the bytes do not match.
+pub fn download_model<'a>(
+    name: Option<&str>,
+    config: &'a crate::config::EffectiveConfig,
+    models_dir: &std::path::Path,
+    transport: Option<&'a dyn crate::model::download::Transport>,
+    on_progress: Option<&'a mut dyn FnMut(u64, u64)>,
+) -> Result<Output> {
+    use crate::model::download::{self, Outcome};
+
+    if config.no_model {
+        return Err(Error::DownloadRefused);
+    }
+    let transport = transport.ok_or(Error::DownloadUnavailable)?;
+
+    let registry = crate::model::registry::registry()?;
+    let name = match name {
+        Some(name) => name.to_owned(),
+        None => match &config.model_name {
+            Some(name) => name.clone(),
+            None => registry
+                .default_entry()
+                .map(|entry| entry.name.clone())
+                .ok_or_else(|| Error::Registry {
+                    message: "the registry has no default model".to_owned(),
+                })?,
+        },
+    };
+    let entry = registry
+        .get(&name)
+        .ok_or_else(|| Error::UnknownModel { name: name.clone() })?;
+
+    let resolved = download::resolve(&download::ResolveInput {
+        name: Some(&name),
+        path: config.model_path.as_deref(),
+        models_dir,
+        search_dirs: &[],
+    })?;
+
+    let mut request = download::request(entry, resolved.clone(), transport);
+    request.mirror = config.model_mirror.as_deref();
+    request.on_progress = on_progress;
+    let outcome = download::ensure(&mut request).map_err(|e| Error::Download {
+        message: e.to_string(),
+    })?;
+
+    let where_to = resolved.path.display();
+    let explanation = match outcome {
+        Outcome::AlreadyPresent => format!("already present and verified: {where_to}"),
+        Outcome::Downloaded => format!(
+            "downloaded {name} ({}), verified, to {where_to}",
+            entry.size_human()
+        ),
+        Outcome::Resumed => format!(
+            "resumed and finished {name} ({}), verified, to {where_to}",
+            entry.size_human()
+        ),
+    };
+
+    Ok(Output {
+        command: String::new(),
+        level: Risk::Safe,
+        mode: Mode::DownloadModel { name: Some(name) }.to_string(),
+        reasons: Vec::new(),
+        segments: Vec::new(),
+        explanation: Some(explanation),
+        executed: false,
+    })
 }
 
 /// How many recent entries are searched for a failure.
@@ -517,4 +677,147 @@ fn explain(command: &str, _parsed: &Parsed) -> Output {
     // does; refusing to answer would make the tool useless for the command most
     // worth understanding. Only `run` decides what is an error.
     out
+}
+
+#[cfg(test)]
+mod download_glue_tests {
+    use super::*;
+    use crate::model::download::Transport;
+    use std::io::{self, Read};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Serves fixed bytes, optionally sliced at `offset`.
+    struct Bytes(Vec<u8>);
+
+    impl Transport for Bytes {
+        fn get(&self, _url: &str, offset: u64) -> io::Result<Box<dyn Read + Send>> {
+            let start = usize::try_from(offset)
+                .unwrap_or(usize::MAX)
+                .min(self.0.len());
+            Ok(Box::new(io::Cursor::new(self.0[start..].to_vec())))
+        }
+
+        fn supports_range(&self) -> bool {
+            true
+        }
+    }
+
+    /// A hand-rolled temp directory, as in `download.rs`: no dependency for one
+    /// helper, and unique per process and per call without randomness.
+    struct Dir(PathBuf);
+
+    impl Dir {
+        fn new(tag: &str) -> Self {
+            static N: AtomicU64 = AtomicU64::new(0);
+            let n = N.fetch_add(1, Ordering::SeqCst);
+            let path =
+                std::env::temp_dir().join(format!("gcode-rt-{}-{tag}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("temp dir");
+            Self(path)
+        }
+    }
+
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn default_name() -> String {
+        crate::model::registry::registry()
+            .expect("registry")
+            .default_entry()
+            .expect("a default entry")
+            .name
+            .clone()
+    }
+
+    #[test]
+    fn an_unknown_name_is_refused_before_any_transfer() {
+        let dir = Dir::new("unknown");
+        let transport = Bytes(Vec::new());
+        let error = download_model(
+            Some("no-such-model"),
+            &crate::config::defaults(),
+            &dir.0,
+            Some(&transport),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, Error::UnknownModel { name } if name == "no-such-model"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn no_transport_reports_a_build_without_a_downloader() {
+        let dir = Dir::new("none");
+        let error = download_model(
+            Some(&default_name()),
+            &crate::config::defaults(),
+            &dir.0,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::DownloadUnavailable), "{error}");
+    }
+
+    #[test]
+    fn no_model_in_the_config_refuses_the_download() {
+        let dir = Dir::new("refused");
+        let mut config = crate::config::defaults();
+        config.no_model = true;
+        let transport = Bytes(Vec::new());
+        let error = download_model(
+            Some(&default_name()),
+            &config,
+            &dir.0,
+            Some(&transport),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::DownloadRefused), "{error}");
+    }
+
+    #[test]
+    fn the_default_model_is_chosen_and_progress_is_reported() {
+        // The body is shorter than the registry declares, so `ensure` reaches the
+        // transfer, reports progress, and then refuses the truncated file. A
+        // `Download` error rather than `UnknownModel` proves the name resolved to
+        // the default entry and the transfer ran.
+        let dir = Dir::new("default");
+        let transport = Bytes(b"not the model".to_vec());
+        let mut seen: Vec<(u64, u64)> = Vec::new();
+        let mut progress = |received: u64, total: u64| seen.push((received, total));
+        let error = download_model(
+            None,
+            &crate::config::defaults(),
+            &dir.0,
+            Some(&transport),
+            Some(&mut progress),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::Download { .. }), "{error}");
+        assert!(
+            !seen.is_empty(),
+            "the progress hook must fire while bytes land"
+        );
+
+        // A refused transfer keeps the partial, because it is still a good prefix
+        // and the next attempt resumes from it rather than paying twice.
+        let entries: Vec<_> = std::fs::read_dir(&dir.0)
+            .expect("readable")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert_eq!(entries.len(), 1, "expected one partial file: {entries:?}");
+        assert!(
+            entries[0].to_string_lossy().ends_with(".part"),
+            "{:?} is not a .part",
+            entries[0]
+        );
+    }
 }

@@ -75,6 +75,80 @@ pub trait Transport: Send + Sync {
     }
 }
 
+/// The real transport: HTTPS over rustls, behind the `download` feature.
+///
+/// This is the only value in the crate that owns a socket, and
+/// `scripts/ci.sh` asserts that `ureq` — the only HTTP client in the tree —
+/// appears in no other file ([ADR 0001](../../docs/adr/0001-local-first-offline-inference.md),
+/// [ADR 0021](../../docs/adr/0021-http-client-behind-a-feature.md)). Everything
+/// else about a download is tested against [`Transport`] fakes.
+///
+/// rustls rather than the platform TLS stack keeps the release a single static
+/// binary with no runtime trust-store dependency ([ADR 0002](../../docs/adr/0002-rust-single-binary.md)).
+/// A wall-clock timeout bounds a stalled connection: without one, a silent
+/// socket holds the process open until the user notices and kills it.
+#[cfg(feature = "download")]
+#[derive(Debug, Clone)]
+pub struct HttpTransport {
+    agent: ureq::Agent,
+}
+
+#[cfg(feature = "download")]
+impl HttpTransport {
+    /// A transport with a ten-minute global timeout.
+    #[must_use]
+    pub fn new() -> Self {
+        let config = ureq::config::Config::builder()
+            .timeout_global(Some(std::time::Duration::from_secs(600)))
+            .build();
+        Self {
+            agent: config.new_agent(),
+        }
+    }
+}
+
+#[cfg(feature = "download")]
+impl Default for HttpTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "download")]
+impl Transport for HttpTransport {
+    fn get(&self, url: &str, offset: u64) -> io::Result<Box<dyn Read + Send>> {
+        let mut request = self.agent.get(url);
+        if offset > 0 {
+            request = request.header("Range", format!("bytes={offset}-"));
+        }
+        let response = request.call().map_err(io::Error::other)?;
+
+        // A 200 to a ranged request means the server ignored `Range`. Appending
+        // its whole body to the surviving prefix would produce a file made of
+        // two copies of the model, so refuse rather than resume. The prefix is
+        // kept; a later attempt from zero still works.
+        if offset > 0 && response.status() != 206 {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the server answered {} to a byte-range request, so the \
+                     transfer cannot be resumed without corrupting the file",
+                    response.status()
+                ),
+            ));
+        }
+
+        // `.into_body().into_reader()` rather than `body_mut().as_reader()`: the
+        // reader must outlive the response, and only the owned form has the
+        // `'static` lifetime a boxed trait object needs.
+        Ok(Box::new(response.into_body().into_reader()))
+    }
+
+    fn supports_range(&self) -> bool {
+        true
+    }
+}
+
 /// Where a model is, or where it should be written.
 ///
 /// Returned by [`resolve`] so a caller can tell the user the path before a long

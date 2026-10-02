@@ -16,6 +16,40 @@ This rule is what keeps the documentation honest — see
 
 ### Added
 
+- `--list-models` and `--list-models --json` (Phase 1.3): print the embedded
+  registry as an aligned table, or as a JSON array keyed by the same fields the
+  downloader uses. Needs no model and no network, so it works on a fresh install,
+  and the table marks the default model and warns when a digest is `unverified`.
+  The JSON is an array rather than the single object every command mode emits,
+  because a list is a list; `main` selects it by mode.
+
+- The clipboard key `c` in the confirmation prompt (Phase 3.6): copies the
+  command on screen — including one produced by a preceding `e` — by shelling out
+  to the platform tool (`pbcopy`; `wl-copy`, `xclip`, or `xsel` on Linux), the
+  same pattern as `e` and `$EDITOR`, so no dependency is added
+  ([ADR 0020](docs/adr/0020-clipboard-via-platform-tool.md)). It is a
+  convenience and never consent: it does not grant, and a failed copy is reported
+  and re-asked rather than swallowed. The copy function is injectable, so the
+  suite never starts a real clipboard process.
+
+- The real HTTPS transport for the model downloader (Phase 1.4), behind the
+  `download` feature: `ureq` with rustls, byte-range requests so an interrupted
+  transfer resumes, and a streamed body so a 400 MB file is never buffered whole
+  ([ADR 0021](docs/adr/0021-http-client-behind-a-feature.md)). `ureq` is named in
+  exactly one file, `src/model/download.rs`, which is what the CI
+  network-containment check enforces; a build without the feature carries no HTTP
+  client at all.
+  - `--download-model [NAME]` is wired through `runtime::download_model`: with no
+    value it fetches the configured model or the registry default; with a value
+    it fetches that entry, refusing a name the registry does not have before any
+    transfer. Progress is a single stderr line and is suppressed for `--json`.
+  - A build without the `download` feature reports `DownloadUnavailable` rather
+    than doing nothing; `no_model` in the config refuses the download.
+
+- `docs/adr/0020-clipboard-via-platform-tool.md` and
+  `docs/adr/0021-http-client-behind-a-feature.md`, with rows in
+  [docs/DECISIONS.md](docs/DECISIONS.md).
+
 - `shell/gcode.bash` (Phase 2.3): the bash history hook. One JSONL line per prompt,
   with the command, its exit status, the working directory, and the timestamp —
   the input `--fix` needs. Tested by sourcing it in a real `/bin/bash` 3.2, because

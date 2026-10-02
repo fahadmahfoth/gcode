@@ -47,7 +47,7 @@ machine-readable pointer.
 | [0](#phase-0--repository-foundation) | Repository foundation | 🟡 in progress | Yes |
 | [1](#phase-1--core-inference-pipeline) | Core inference pipeline | 🟡 in progress | Yes |
 | [2](#phase-2--shell-integration) | Shell integration & history | 🟢 shipped; acceptance pending | Yes |
-| [3](#phase-3--safety-layer) | Safety layer | 🟡 3.6 has three items open | Yes |
+| [3](#phase-3--safety-layer) | Safety layer | 🟡 3.6 has two items open | Yes |
 | [4](#phase-4--packaging) | Packaging | ⬜ not started | Yes |
 | [5](#phase-5--distribution--cicd) | Distribution & CI/CD | ⬜ not started | No |
 | [6](#phase-6--polish--launch) | Polish & launch | ⬜ not started | No |
@@ -289,8 +289,13 @@ Two additions beyond the listed tasks:
 - [x] Mismatch → delete, try the mirror, then error with both hashes printed
 - [x] HTTP Range resume when `.part` exists and the transport supports ranges
 - [x] The network is behind a `Transport` trait so the module is testable
-      entirely offline; the real HTTP transport is expected behind the
-      `download` feature
+      entirely offline; the real HTTPS transport (`ureq`, behind the `download`
+      feature) implements it in this same file, the only file CI allows to name
+      an HTTP client (ADR 0021)
+- [x] `--download-model [NAME]` wired through `runtime::download_model`, with
+      `--download-model` choosing the configured model and the value choosing a
+      named one; a build without the `download` feature reports
+      `DownloadUnavailable` rather than doing nothing (ADR 0021)
 - [x] **Test:** correct file downloaded, path created, digest verified
 - [x] **Test:** server returns wrong bytes → partial deleted, error with the hashes
 - [x] **Test:** pre-existing `.part` resumes from the right offset
@@ -682,7 +687,8 @@ is deliberately no test that runs the whole binary against the real home.
 
 ## Phase 3 — Safety layer
 
-**Status: 🟡 3.1–3.5, 3.7, 3.8 shipped. 3.6 mostly; three items open.**
+**Status: 🟡 3.1–3.5, 3.7, 3.8 shipped. 3.6 mostly; two items open
+(`Ctrl+C` and the `MEDIUM+` cost estimate).**
 **Goal: a CRITICAL command is unrunnable, and editing cannot bypass it.**
 
 See [SAFETY.md](SAFETY.md) for the full model. This is the build list.
@@ -768,8 +774,8 @@ See [SAFETY.md](SAFETY.md) for the full model. This is the build list.
 
 ### 3.6 Confirmation UI — `src/ui/prompt.rs`
 
-- [x] Keys: `y n e c ? r`. `y`, `n`, `q`, `?`, `r`, and `e` are handled; `c` is
-      recognised and declined (see below)
+- [x] Keys: `y n e c ? r`. All are handled; `c` copies to the clipboard by
+      shelling out to the platform tool (ADR 0020)
 - [ ] `Ctrl+C` cancels — **not implementable as written.** The crate is
       `#![forbid(unsafe_code)]`, so the signal handler libc would need is out,
       and the portable alternative is a new dependency. Both are decisions this
@@ -797,12 +803,12 @@ See [SAFETY.md](SAFETY.md) for the full model. This is the build list.
       original. 18 tests in `src/ui/prompt.rs`, reachable only after the prompt's
       input and editor were made injectable — reaching them through a real terminal
       or `std::env::set_var` was not an option
-- [ ] `c` copies to the clipboard — **not implemented, and deliberately
-      declined.** Every clipboard path means shelling out to a platform tool
-      (`pbcopy`, `xclip`, `wl-copy`), which is a dependency decision this
-      repository has not made. The key is recognised and answers "no" rather than
-      being ignored, so a user pressing it is not left with a button that does
-      nothing
+- [x] `c` copies to the clipboard by shelling out to the platform tool
+      (`pbcopy`, `wl-copy`, `xclip`, `xsel`, in that order), the same pattern as
+      `e` and `$EDITOR`, so no dependency is added (ADR 0020). The copy is a
+      convenience and never consent: it does not grant, and a failed copy is
+      reported and re-asked rather than swallowed. Tests inject the copy function
+      and never start a real clipboard process
 - [x] Default is `N` at every level. There is no branch in `ui/prompt.rs` that
       turns "I could not ask" into permission: end of input, an empty line, an
       unrecognised key, a closed stdin, a read error, and an editor that fails all

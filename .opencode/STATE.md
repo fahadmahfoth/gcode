@@ -18,9 +18,10 @@ first_incomplete_task: 1.5
 # the model, and gates everything that later runs a command.
 #
 # 3.1-3.5, 3.7, and 3.8 are written, tested, and passing. 3.6 has its keymap, the
-# default-to-no behaviour, the non-interactive refusal, and re-prompting after an
-# edit. Still open in phase 3: Ctrl+C handling, the MEDIUM+ cost estimate, and the
-# clipboard key. Phase 3 stays in_progress, not done.
+# default-to-no behaviour, the non-interactive refusal, re-prompting after an
+# edit, and (new) the clipboard key `c` via a platform tool (ADR 0020). Still open
+# in phase 3: Ctrl+C handling and the MEDIUM+ cost estimate. Phase 3 stays
+# in_progress, not done.
 
 # Phases, in order. `next` is the only actionable one.
 phases:
@@ -37,8 +38,11 @@ phases:
     # The model registry now holds three real, commit-pinned entries (ADR 0018),
     # but all are `verified = false`: the hashes are published by HuggingFace and
     # have not been confirmed by a local download. A release build is refused
-    # until then. 1.5 (sampler) and 1.6 (grammar) still need llama-cpp-rs, a C++
-    # toolchain, real weights, and disk.
+    # until then. 1.4 is now finished: --list-models prints the registry and
+    # --download-model [NAME] drives a real HTTPS transport (ureq behind the
+    # `download` feature, ADR 0021), with stderr progress and resume. 1.5 (sampler)
+    # and 1.6 (grammar) still need llama-cpp-rs, a C++ toolchain, real weights, and
+    # disk.
     status: in_progress
     next: true
   - id: 2
@@ -59,9 +63,9 @@ phases:
   - id: 3
     name: "Safety layer"
     # 3.1-3.5, 3.7, 3.8 written and verified, and 3.6 has its keymap, the
-    # default-to-no behaviour, the non-interactive refusal, and re-prompting after
-    # an edit. Still open: Ctrl+C handling, the MEDIUM+ cost estimate, and the
-    # clipboard key. Both coverage criteria are now measured and met.
+    # default-to-no behaviour, the non-interactive refusal, re-prompting after an
+    # edit, and the clipboard key `c` (ADR 0020). Still open: Ctrl+C handling and
+    # the MEDIUM+ cost estimate. Coverage is measured and above target.
     status: in_progress
   - id: 4
     name: "Packaging"
@@ -87,17 +91,19 @@ phases:
 
 code_written: true
 tests_written: true
-# Measured with `cargo llvm-cov --summary-only`. Workspace total is 92.7 % of lines
-# / 92.3 % of regions (92.72 % and 92.27 % on the Phase 2.6 run). The figure moves
-# a little between runs because the timing-dependent tests exercise different
-# paths; quote it to one decimal. context/env.rs 96.34 % lines; context/prompt.rs
-# 97.95 %; shell/install.rs 78.08 % (the lowest module: the file-writing branches
-# are only reached on a real disk error, and the happy paths are covered);
-# shell/mod.rs 94.00 %; runtime.rs 87.03 %; context/history.rs 76.79 % (the IO
-# failure branches need a real disk error); ui/prompt.rs 82.37 %;
-# safety/patterns.rs 98.33 %; safety/classifier.rs 99.20 % (no uncovered line; the
-# region gap is short-circuit right-hand sides); safety/mod.rs 100 %.
-coverage_measured: 92.68
+# Measured with `cargo llvm-cov --summary-only --all-features`. Workspace total is
+# 91.1 % of lines / 88.5 % of regions (91.06 % and 88.53 % on the 1.4/3.6 run).
+# The figure moved down from 92.7 % because the new code lives in paths the suite
+# cannot reach: `main.rs` and `ui/progress.rs` are process-level and 0 % in a
+# library run, and `runtime.rs` lost a few points to the new download glue. Still
+# well above the 85 % target. Per module: context/env.rs 96.34 % lines;
+# context/prompt.rs 97.95 %; model/download.rs 88.57 % (the HTTP transport branch
+# is not exercised offline); model/registry.rs 96.11 %; shell/install.rs 78.08 %
+# (the lowest module: file-writing branches need a real disk error);
+# context/history.rs 76.79 % (same IO-failure reason); runtime.rs 82.63 %;
+# ui/prompt.rs 80.33 %; safety/patterns.rs 98.33 %; safety/classifier.rs 99.20 %;
+# safety/mod.rs 100 %.
+coverage_measured: 91.06
 coverage_target: 85
 
 # Everything that needs a human. Empty means nothing is blocked on the human.
@@ -134,9 +140,10 @@ needs_human_later:
 # Verified present. See `last_verified` for what was actually run against it.
 toolchain_present: true
 
-# Compiled, and `--locked` clean. Five dependencies are declared: thiserror,
-# anyhow, dirs, clap, and toml with serde for the config layer. `inference` and
-# `download` stay empty until Phase 1.4 resolves their versions.
+# Compiled, and `--locked` clean. Direct dependencies: thiserror, anyhow, dirs,
+# clap, toml, serde, sha2, serde_json, and an optional ureq (the `download`
+# feature, ADR 0021) — ureq is named only in src/model/download.rs. `inference`
+# stays empty until Phase 1.5/1.6 attach llama-cpp-rs and llguidance.
 manifest_written: true
 manifest_compiled: true
 platforms_verified:
@@ -144,23 +151,24 @@ platforms_verified:
 platforms_unverified:
   - Linux x86_64
 last_verified: >-
-  macOS aarch64, rustc 1.98.1, after the model registry (ADR 0018) and the local
-  CI (ADR 0019) work: `./scripts/ci.sh` exits 0 — fmt clean, clippy
-  `-D warnings` clean, `cargo test` 592 passed / 0 failed (446 lib, 14 tests/api.rs,
-  27 tests/hook_bash.rs, 24 tests/hook_zsh.rs, 59 tests/runtime.rs, 19 tests/safety.rs
-  incl. the 10 000-command fuzz, 3 doc), `cargo build --locked` passed, the policy
-  greps pass, the credential scan matches only the two reviewed false positives,
+  macOS aarch64, rustc 1.98.1, after --list-models, the clipboard key `c`
+  (ADR 0020), and the HTTPS downloader plus --download-model (ADR 0021):
+  `./scripts/ci.sh` exits 0 — fmt clean, clippy `-D warnings` clean,
+  `cargo test --all-features --locked` 612 passed / 0 failed (466 lib,
+  14 tests/api.rs, 27 tests/hook_bash.rs, 24 tests/hook_zsh.rs, 59 tests/runtime.rs,
+  19 tests/safety.rs incl. the 10 000-command fuzz, 3 doc), `cargo build --locked`
+  passed, the policy greps pass (network confined to src/model/download.rs), the
+  credential scan matches only the two reviewed false positives,
   `mandoc -T lint docs/gcode.1` clean, and the documentation link check passes.
   `cargo build --release --locked` is skipped by the `verified = false` gate;
-  `cargo audit` and `cargo deny` are not installed. `cargo llvm-cov --summary-only`
-  reports 92.68 % lines / 92.26 % regions; model/registry.rs 94.94 % lines;
-  runtime.rs 87.03 %. The local gate's safety-purity grep was fixed to ignore
-  comment lines after it falsely matched the doc comment in `src/safety/mod.rs`
-  that states the module never imports the model.
+  `cargo audit` and `cargo deny` are not installed.
+  `cargo llvm-cov --summary-only --all-features` reports 91.06 % lines /
+  88.53 % regions; model/registry.rs 96.11 % lines; model/download.rs 88.57 %;
+  runtime.rs 82.63 %.
 
 older_previous_last_verified: "macOS aarch64, rustc 1.98.1, after Phase 1.7: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 223 passed / 0 failed; `cargo build --locked` passed; MSRV audit clean over 65 locked packages; `mandoc -T lint docs/gcode.1` clean; secret scan clean; `cargo build --release --locked` failed by design on the placeholder registry"
 
-last_command: "scripts/ci.sh (fmt, clippy, cargo test, cargo build --locked, policy greps, secret scan, mandoc, doc-link check), cargo llvm-cov --summary-only, cargo build --release --locked (skipped by the verified gate), python3 scripts/check-doc-links.py, and git branch/status checks"
+last_command: "scripts/ci.sh (fmt, clippy, cargo test --all-features, cargo build --locked, policy greps, secret scan, mandoc, doc-link check), cargo test --all-features, cargo llvm-cov --summary-only --all-features, python3 scripts/check-doc-links.py, and git branch/status checks"
 
 ```
 
@@ -175,19 +183,25 @@ last_command: "scripts/ci.sh (fmt, clippy, cargo test, cargo build --locked, pol
   `panic = "unwind"`. The comment above the profile claims the profile meets the
   ADR. One of the two is wrong and only the human can say which. Human-only per
   AGENTS.md section 6.
-- The canonical branch is `main` (a human decision, 2026-10-03). Local `main`
-  was force-set to the commit that carries the work and checked out; it is ahead
-  of `origin/main` and diverged from it. Nothing has been pushed. `origin/HEAD`
-  still points at `origin/master` until a human pushes `main` and updates the
-  remote default. `docs/CONTRIBUTING.md` now names `main`.
+- The canonical branch is `main` (a human decision, 2026-10-03). Local `main` and
+  `origin/main` both carry the work; `origin/HEAD` still points at
+  `origin/master` until a human changes the remote default. `docs/CONTRIBUTING.md`
+  names `main`.
 - Disk: 2.3 GiB free on a 99%-full volume. Phase 1.5 needs `llama-cpp-rs`, which
   builds C++ and will fail partway through on a full disk. `cargo clean` between
   phases, or a larger volume, is the cheapest thing the human can do before then.
-- Phase 1.4 is checked off in the roadmap but is not finished: there is no real
-  HTTPS transport behind the `Transport` trait, the `download` feature is not
-  wired, there is no stderr progress renderer, and nothing calls
-  `ensure_model()`. What is finished and tested is the engine underneath: the
-  checksum, the `.part` file, resume, mirrors, and atomic rename.
+- Phase 1.4 is now finished: `--list-models` prints the embedded registry,
+  `--download-model [NAME]` drives a real HTTPS transport (`ureq` behind the
+  `download` feature, ADR 0021) with byte-range resume and a stderr progress line.
+  What remains unproven is the model itself: every entry is `verified = false`,
+  so a real download+hash is still the 🔒 step (ADR 0010).
+- Ctrl+C (ROADMAP 3.6) is still open and has no implementation. The default
+  SIGINT already terminates the process (exit 130), which is what the man page
+  means by "Ctrl+C cancels the invocation", and a killed download leaves its
+  resumable `.part` intact. A decision is pending: either record that the
+  process default is the answer (an ADR), or add a cooperative-cancel
+  handler around the downloader with a `ctrlc` dependency. The prompt cannot be
+  unblocked by a flag alone because `read_line` retries on EINTR.
 - Phase 1.5's timeout is not a wall clock. It uses `std::thread::scope`, which
   joins the generation thread, so a model that never finishes will not be
   abandoned at the deadline. A real timeout needs `CancellationToken` or an

@@ -265,6 +265,114 @@ impl Registry {
             .map(|entry| entry.name.as_str())
             .ok_or(RegistryError::NoDefault)
     }
+
+    /// The registry as a human-readable table, for `--list-models`.
+    ///
+    /// Columns are sized to their widest cell so the output stays aligned
+    /// whatever a future entry is called, and the entry that `--download-model`
+    /// would pick is marked with `*`. The description is last and never padded,
+    /// because it is prose of arbitrary length.
+    #[must_use]
+    pub fn table(&self) -> String {
+        use std::fmt::Write as _;
+
+        let name_width = self
+            .entries
+            .iter()
+            .map(|entry| entry.name.len())
+            .max()
+            .unwrap_or(0);
+        let size_width = self
+            .entries
+            .iter()
+            .map(|entry| entry.size_human().len())
+            .max()
+            .unwrap_or(0);
+        let license_width = self
+            .entries
+            .iter()
+            .map(|entry| entry.license.len())
+            .max()
+            .unwrap_or(0);
+
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "  {:<name_width$}  {:<size_width$}  {:<license_width$}  {:<10}  DESCRIPTION",
+            "NAME", "SIZE", "LICENSE", "STATUS"
+        );
+        for entry in &self.entries {
+            let marker = if entry.default { '*' } else { ' ' };
+            let status = if entry.verified {
+                "verified"
+            } else {
+                "unverified"
+            };
+            let _ = writeln!(
+                out,
+                "{marker} {:<name_width$}  {:<size_width$}  {:<license_width$}  {:<10}  {}",
+                entry.name,
+                entry.size_human(),
+                entry.license,
+                status,
+                entry.description.as_deref().unwrap_or("")
+            );
+        }
+        // The `*` is only meaningful if it is explained, and the verification
+        // note is the one fact a user needs before trusting a first download.
+        let default = self
+            .default_entry()
+            .map_or("(none)", |entry| entry.name.as_str());
+        let _ = write!(out, "\n* = the default model ({default})\n");
+        if self.entries.iter().any(|entry| !entry.verified) {
+            out.push_str(
+                "unverified = the digest has not been confirmed by downloading the file\n",
+            );
+        }
+        out
+    }
+
+    /// The registry as a JSON array, for `--list-models --json`.
+    ///
+    /// Hand-built with the crate's one string escaper so a description
+    /// containing a quote cannot break the array, and so the shape is fixed
+    /// rather than inferred from a derive.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut out = String::with_capacity(512 * self.entries.len());
+        out.push('[');
+        for (index, entry) in self.entries.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"name\":");
+            crate::json_string(&entry.name, &mut out);
+            out.push_str(",\"description\":");
+            match &entry.description {
+                Some(description) => crate::json_string(description, &mut out),
+                None => out.push_str("null"),
+            }
+            out.push_str(",\"size_bytes\":");
+            out.push_str(&entry.size_bytes.to_string());
+            out.push_str(",\"size_human\":");
+            crate::json_string(&entry.size_human(), &mut out);
+            out.push_str(",\"context_size\":");
+            out.push_str(&entry.context_size.to_string());
+            out.push_str(",\"license\":");
+            crate::json_string(&entry.license, &mut out);
+            out.push_str(",\"default\":");
+            out.push_str(if entry.default { "true" } else { "false" });
+            out.push_str(",\"verified\":");
+            out.push_str(if entry.verified { "true" } else { "false" });
+            out.push_str(",\"sha256\":");
+            crate::json_string(&entry.sha256, &mut out);
+            out.push_str(",\"url\":");
+            crate::json_string(&entry.url, &mut out);
+            out.push('}');
+        }
+        out.push(']');
+        out
+    }
 }
 
 /// The embedded registry, parsed once.
@@ -720,6 +828,67 @@ license = "MIT"
             default.sha256.len(),
             super::SHA256_HEX_LEN,
             "the shipped default model has a malformed checksum"
+        );
+    }
+
+    // ── --list-models rendering ─────────────────────────────────────────────
+
+    #[test]
+    fn the_table_names_every_model_and_marks_the_default() {
+        let registry = Registry::parse(&valid()).unwrap();
+        let table = registry.table();
+        assert!(table.contains("test-model"), "{table}");
+        assert!(table.contains("1000 B"), "the size must be shown: {table}");
+        assert!(table.contains('*'), "the default must be marked: {table}");
+        assert!(table.contains("MIT"), "the licence must be shown: {table}");
+        assert!(
+            table.contains("unverified"),
+            "an unverified entry must say so: {table}"
+        );
+    }
+
+    #[test]
+    fn the_table_of_a_verified_registry_has_no_unverified_note() {
+        let text = valid().replace("license = \"MIT\"", "license = \"MIT\"\nverified = true");
+        let registry = Registry::parse(&text).unwrap();
+        let table = registry.table();
+        assert!(table.contains("verified"), "{table}");
+        assert!(
+            !table.contains("unverified"),
+            "a verified registry must not carry the note: {table}"
+        );
+    }
+
+    #[test]
+    fn the_json_is_an_array_of_every_entry_with_the_documented_fields() {
+        let registry = Registry::parse(&valid()).unwrap();
+        let json = registry.to_json();
+        assert!(json.starts_with('[') && json.ends_with(']'), "{json}");
+        assert!(json.contains("\"name\":\"test-model\""), "{json}");
+        assert!(json.contains("\"size_bytes\":1000"), "{json}");
+        assert!(json.contains("\"size_human\":\"1000 B\""), "{json}");
+        assert!(json.contains("\"default\":true"), "{json}");
+        assert!(json.contains("\"verified\":false"), "{json}");
+        assert!(json.contains(&format!("\"sha256\":\"{HASH}\"")), "{json}");
+    }
+
+    #[test]
+    fn a_description_with_a_quote_does_not_break_the_json() {
+        // The escaper is the crate's one, so this must hold for a hostile name.
+        let text = valid().replace(
+            "license = \"MIT\"",
+            "license = \"MIT\"\ndescription = \"a \\\"quoted\\\" model\"",
+        );
+        let registry = Registry::parse(&text).unwrap();
+        let json = registry.to_json();
+        assert!(
+            json.contains("\\\"quoted\\\""),
+            "unterminated escape: {json}"
+        );
+        assert_eq!(
+            json.matches('"').count() % 2,
+            0,
+            "unbalanced quotes: {json}"
         );
     }
 }

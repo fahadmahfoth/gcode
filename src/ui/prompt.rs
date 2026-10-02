@@ -19,15 +19,19 @@
 //! # What is implemented, and what is not
 //!
 //! Implemented and tested: the keymap, the default-to-no behaviour, the
-//! non-interactive refusal, and re-classification after an edit, which is the
-//! invariant that matters — `e` turning a HIGH command into a CRITICAL one must
-//! block, not run.
+//! non-interactive refusal, the clipboard (`c`), and re-classification after an
+//! edit, which is the invariant that matters — `e` turning a HIGH command into a
+//! CRITICAL one must block, not run.
 //!
-//! Not implemented: the clipboard (`c`) and the cost estimate for `MEDIUM+`. Both
-//! need a decision this repository has not recorded. `c` means shelling out to a
-//! platform tool, which is a new dependency, and a cost estimate implies a model
-//! accounting scheme nothing else knows about. Inventing either would be worse
-//! than recognising the key and declining it.
+//! Not implemented: the cost estimate for `MEDIUM+`. It implies a model
+//! accounting scheme nothing else knows about, and inventing a number for a user
+//! about to make a safety decision would be worse than saying nothing.
+//!
+//! The clipboard shells out to the platform tool (`pbcopy`, `wl-copy`, `xclip`,
+//! `xsel`) rather than linking a crate, because it is the same shape as the
+//! `$EDITOR` path already here and adds no dependency to audit. Which tool is
+//! tried, and in what order, is a decision recorded in
+//! [ADR 0020](../../docs/adr/0020-clipboard-via-platform-tool.md).
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::process::Command;
@@ -38,6 +42,10 @@ use crate::safety;
 /// How `e` gets an edited command. A named type because the signature is long
 /// enough that Clippy's complexity threshold is a readability win, not pedantry.
 type Editor = Box<dyn FnMut(&str) -> Option<String> + Send>;
+
+/// How `c` copies the command. Returns whether the copy succeeded. A named type
+/// for the same reason [`Editor`] is one.
+type Clipboard = Box<dyn FnMut(&str) -> bool + Send>;
 
 /// A [`Consenter`] that asks a human.
 ///
@@ -58,6 +66,8 @@ pub struct Prompt {
     input: Option<Box<dyn BufRead + Send>>,
     /// How `e` gets an edited command. `None` means run `$EDITOR`.
     editor: Option<Editor>,
+    /// How `c` copies the command. `None` means the platform clipboard tool.
+    clipboard: Option<Clipboard>,
 }
 
 impl std::fmt::Debug for Prompt {
@@ -90,6 +100,14 @@ impl std::fmt::Debug for Prompt {
                     "$EDITOR"
                 },
             )
+            .field(
+                "clipboard",
+                &if self.clipboard.is_some() {
+                    "injected"
+                } else {
+                    "platform"
+                },
+            )
             .finish()
     }
 }
@@ -102,6 +120,7 @@ impl Prompt {
             out: None,
             input: None,
             editor: None,
+            clipboard: None,
         }
     }
 
@@ -112,6 +131,7 @@ impl Prompt {
             out: Some(Box::new(out)),
             input: None,
             editor: None,
+            clipboard: None,
         }
     }
 
@@ -136,6 +156,17 @@ impl Prompt {
     #[must_use]
     pub fn editing(mut self, edit: impl FnMut(&str) -> Option<String> + Send + 'static) -> Self {
         self.editor = Some(Box::new(edit));
+        self
+    }
+
+    /// A prompt whose `c` key calls `copy` instead of the platform clipboard.
+    ///
+    /// Injecting it keeps the test suite from putting `rm -rf ./build` on the
+    /// developer's clipboard, and is what makes the `c` path — including the
+    /// failed-copy branch — reachable without spawning `pbcopy` or `xclip`.
+    #[must_use]
+    pub fn copying(mut self, copy: impl FnMut(&str) -> bool + Send + 'static) -> Self {
+        self.clipboard = Some(Box::new(copy));
         self
     }
 
@@ -194,9 +225,37 @@ impl Prompt {
         self.with_writer(|out| {
             writeln!(
                 out,
-                "  [y] run it  [n/Esc] cancel  [e] edit and re-check  [?] why"
+                "  [y] run it  [n/Esc] cancel  [c] copy  [e] edit and re-check  [?] why"
             )?;
             write!(out, "  default is no\n> ")?;
+            out.flush()
+        })
+    }
+
+    /// Copies `command` to the clipboard, returning whether it worked.
+    ///
+    /// The injected copy is used when one is set, otherwise the platform tool.
+    /// A copy never grants anything: like `?` and `r`, control falls back to the
+    /// question, so pressing `c` cannot run the command it copied.
+    fn copy(&mut self, command: &str) -> bool {
+        match self.clipboard {
+            Some(ref mut injected) => injected(command),
+            None => copy_to_platform(command),
+        }
+    }
+
+    /// Tells the user whether the copy worked, and why not when it did not.
+    fn copy_note(&mut self, copied: bool) -> io::Result<()> {
+        self.with_writer(|out| {
+            if copied {
+                writeln!(out, "  copied to the clipboard")?;
+            } else {
+                writeln!(
+                    out,
+                    "  could not copy: no clipboard tool found \
+                     (pbcopy, wl-copy, xclip, or xsel)"
+                )?;
+            }
             out.flush()
         })
     }
@@ -228,6 +287,63 @@ fn read_one(reader: &mut impl BufRead, buf: &mut String) -> Option<String> {
         Ok(0) | Err(_) => None,
         Ok(_) => Some(std::mem::take(buf)),
     }
+}
+
+/// Copies `text` with the first platform clipboard tool that works.
+///
+/// macOS and Linux only, consistent with ADR 0013's "no native Windows in v1.x".
+/// Each candidate is tried in order and its exit status decides success, so a
+/// machine with none of them simply reports the copy failed. The text travels
+/// over stdin rather than as an argument, so a command containing a newline or a
+/// quote needs no shell escaping and cannot be split by the operating system's
+/// argument parser.
+#[cfg(unix)]
+fn copy_to_platform(text: &str) -> bool {
+    const MACOS: &[(&str, &[&str])] = &[("pbcopy", &[])];
+    const LINUX: &[(&str, &[&str])] = &[
+        ("wl-copy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+    ];
+    let candidates = if cfg!(target_os = "macos") {
+        MACOS
+    } else {
+        LINUX
+    };
+    candidates
+        .iter()
+        .any(|(program, args)| try_copy(program, args, text))
+}
+
+/// Runs one clipboard tool. `false` when it is absent or exits non-zero.
+#[cfg(unix)]
+fn try_copy(program: &str, args: &[&str], text: &str) -> bool {
+    use std::process::{Command, Stdio};
+
+    let Ok(mut child) = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    if let Some(stdin) = child.stdin.as_mut() {
+        if stdin.write_all(text.as_bytes()).is_err() {
+            return false;
+        }
+    }
+    // Closing the pipe is what tells `wl-copy` and `xclip` the text is complete;
+    // leaving it open makes them wait for more and never exit.
+    drop(child.stdin.take());
+    matches!(child.wait(), Ok(status) if status.success())
+}
+
+/// No native Windows support in v1.x (ADR 0013), so there is no clipboard path.
+#[cfg(not(unix))]
+fn copy_to_platform(_text: &str) -> bool {
+    false
 }
 
 impl Prompt {
@@ -319,10 +435,17 @@ impl Consenter for Prompt {
             };
             match line.trim().to_ascii_lowercase().as_str() {
                 "y" => return Decision::Granted(current),
-                // Every other answer, including the clipboard key, is a refusal.
-                // Collected here so the list of "no" is one arm: adding a key that
-                // grants must be a deliberate edit to this line.
-                "" | "n" | "q" | "c" => return Decision::Denied,
+                // Every answer that is not a yes denies. Collected here so the
+                // list of "no" is one arm: adding a key that grants must be a
+                // deliberate edit to this line.
+                "" | "n" | "q" => return Decision::Denied,
+                "c" => {
+                    // A copy is a convenience, not consent. The question is
+                    // asked again, so `c` can be repeated and still ends in a
+                    // refusal unless the user separately answers `y`.
+                    let copied = self.copy(&current);
+                    let _ = self.copy_note(copied);
+                }
                 "?" => {
                     let _ = self.explain(&current_verdict);
                 }
@@ -463,14 +586,18 @@ mod tests {
     /// Drives the prompt with scripted answers and returns what it decided.
     fn ask(answers: &str, command: &str) -> Decision {
         let verdict = safety::classify(command);
-        let mut p = Prompt::to(Vec::new()).reading(io::Cursor::new(answers.to_owned()));
+        let mut p = Prompt::to(Vec::new())
+            .reading(io::Cursor::new(answers.to_owned()))
+            .copying(|_| true);
         p.ask(command, &verdict)
     }
 
     fn rendered(answers: &str, command: &str) -> (Decision, String) {
         let verdict = safety::classify(command);
         let sink = Sink::default();
-        let mut prompt = Prompt::to(sink.clone()).reading(io::Cursor::new(answers.to_owned()));
+        let mut prompt = Prompt::to(sink.clone())
+            .reading(io::Cursor::new(answers.to_owned()))
+            .copying(|_| true);
         let decision = prompt.ask(command, &verdict);
         (decision, sink.text())
     }
@@ -529,6 +656,95 @@ mod tests {
         );
     }
 
+    // ── the clipboard (`c`), which is a convenience and never consent ──────
+
+    /// Drives the prompt with a recording clipboard and scripted answers.
+    fn ask_with_clipboard(
+        answers: &str,
+        command: &str,
+        copy: impl FnMut(&str) -> bool + Send + 'static,
+    ) -> (Decision, String) {
+        let verdict = safety::classify(command);
+        let sink = Sink::default();
+        let mut prompt = Prompt::to(sink.clone())
+            .reading(io::Cursor::new(answers.to_owned()))
+            .copying(copy);
+        let decision = prompt.ask(command, &verdict);
+        (decision, sink.text())
+    }
+
+    #[test]
+    fn c_copies_the_command_but_does_not_run_it() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        let (decision, text) = ask_with_clipboard("c\nn\n", "rm -rf ./build", move |cmd| {
+            recorder.lock().expect("unpoisoned").push(cmd.to_owned());
+            true
+        });
+        assert_eq!(
+            decision,
+            Decision::Denied,
+            "a copy must not be a yes; only a separate `y` grants"
+        );
+        assert_eq!(
+            *seen.lock().expect("unpoisoned"),
+            vec!["rm -rf ./build"],
+            "the copied text must be the command on screen"
+        );
+        assert!(text.contains("copied to the clipboard"), "{text}");
+    }
+
+    #[test]
+    fn c_then_y_still_grants_and_copies_the_same_command() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        let (decision, _) = ask_with_clipboard("c\ny\n", "echo hi", move |cmd| {
+            recorder.lock().expect("unpoisoned").push(cmd.to_owned());
+            true
+        });
+        assert_eq!(decision, Decision::Granted("echo hi".into()));
+        assert_eq!(*seen.lock().expect("unpoisoned"), vec!["echo hi"]);
+    }
+
+    #[test]
+    fn a_failed_copy_reports_it_and_asks_again() {
+        let (decision, text) = ask_with_clipboard("c\ny\n", "echo hi", |_| false);
+        assert_eq!(
+            decision,
+            Decision::Granted("echo hi".into()),
+            "a copy failure must not block answering the question"
+        );
+        assert!(text.contains("could not copy"), "{text}");
+    }
+
+    #[test]
+    fn c_after_an_edit_copies_the_edited_command() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        let verdict = safety::classify("echo one");
+        let sink = Sink::default();
+        let mut prompt = Prompt::to(sink)
+            .reading(io::Cursor::new("e\nc\nn\n".to_owned()))
+            .editing(|_| Some("echo two".to_owned()))
+            .copying(move |cmd| {
+                recorder.lock().expect("unpoisoned").push(cmd.to_owned());
+                true
+            });
+        let decision = prompt.ask("echo one", &verdict);
+        assert_eq!(decision, Decision::Denied);
+        assert_eq!(
+            *seen.lock().expect("unpoisoned"),
+            vec!["echo two"],
+            "`c` must copy what is on screen, which is the edit"
+        );
+    }
+
+    #[test]
+    fn the_legend_offers_the_copy_key() {
+        let (_, text) = rendered("n\n", "rm -rf ./build");
+        assert!(text.contains("[c]"), "the legend must offer [c]: {text}");
+    }
+
     #[test]
     fn question_mark_explains_and_asks_again() {
         let (decision, text) = rendered("?\ny\n", "rm -rf /etc/x");
@@ -576,7 +792,8 @@ mod tests {
         let sink = Sink::default();
         let mut prompt = Prompt::to(sink.clone())
             .reading(io::Cursor::new(answers.to_owned()))
-            .editing(edit);
+            .editing(edit)
+            .copying(|_| true);
         let decision = prompt.ask(command, &verdict);
         (decision, sink.text())
     }

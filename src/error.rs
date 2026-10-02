@@ -238,4 +238,42 @@ pub enum Error {
         crate::shell::END_MARKER
     )]
     ShellBlockMalformed,
+
+    /// `--download-model` named a model the embedded registry does not have.
+    ///
+    /// Refused rather than falling back to the default. A user who typed a name
+    /// expects that model, and handing them a different one under a success
+    /// message is the failure this project treats as a lie.
+    #[error("no model named {name} in the registry. Run --list-models to see the names")]
+    UnknownModel {
+        /// The name the user typed.
+        name: String,
+    },
+
+    /// A download was requested from a build that cannot reach the network.
+    ///
+    /// The `download` feature is off, so this binary carries no HTTP client at
+    /// all ([ADR 0001](docs/adr/0001-local-first-offline-inference.md)). Saying
+    /// so is the honest answer; silently failing to fetch would look like a
+    /// network problem the user cannot fix.
+    #[error(
+        "this build has no downloader. Rebuild with `--features download`, or \
+         place the .gguf file in the model directory by hand"
+    )]
+    DownloadUnavailable,
+
+    /// A download was requested while `no_model` is set in the configuration.
+    #[error("a model download was requested, but `no_model` is set in the configuration")]
+    DownloadRefused,
+
+    /// A model download failed.
+    ///
+    /// Carries the rendered [`DownloadError`](crate::model::download::DownloadError),
+    /// which already names the URL, both digests on a mismatch, and whether the
+    /// partial file was kept.
+    #[error("{message}")]
+    Download {
+        /// The failure, already formatted for a terminal.
+        message: String,
+    },
 }

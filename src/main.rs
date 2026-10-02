@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use gcode::cli;
 use gcode::config::RiskLevel;
-use gcode::runtime::{run, DenyAll, DEFAULT_CONFIRM_AT};
+use gcode::runtime::{run_configured, DenyAll, DEFAULT_CONFIRM_AT};
 use gcode::safety::Risk;
 use gcode::ui::prompt::Prompt;
 
@@ -71,18 +71,37 @@ fn main() {
     // malformed would be safe but useless, and silently continuing at the
     // configured-but-unreadable threshold would be neither. The message means
     // the user learns about it either way.
-    let always_confirm = match load_effective_config(&parsed) {
-        Ok(config) => Risk::from(config.always_confirm),
+    let config = match load_effective_config(&parsed) {
+        Ok(config) => config,
         Err(error) => {
             eprintln!("gcode: {error}");
-            Risk::from(RiskLevel::Medium)
+            gcode::config::defaults()
         }
     };
+    let always_confirm = Risk::from(config.always_confirm);
     debug_assert_eq!(
         DEFAULT_CONFIRM_AT,
         Risk::from(RiskLevel::Medium),
         "the run loop's default and the config default must agree"
     );
+
+    // The downloader's HTTP client exists only when the feature is compiled in.
+    // Without it the download mode reports that honestly; it never falls back to
+    // a shell-out or a different transport (ADR 0001).
+    #[cfg(feature = "download")]
+    let transport: Option<Box<dyn gcode::model::download::Transport>> =
+        Some(Box::new(gcode::model::download::HttpTransport::new()));
+    #[cfg(not(feature = "download"))]
+    let transport: Option<Box<dyn gcode::model::download::Transport>> = None;
+
+    // Live progress on stderr, and never for `--json`: the progress line is not
+    // part of the machine-readable contract.
+    let mut progress = gcode::ui::progress::line;
+    let on_progress: Option<&mut dyn FnMut(u64, u64)> = if parsed.json {
+        None
+    } else {
+        Some(&mut progress)
+    };
 
     // The prompt is only ever constructed for an interactive run. `--json` gets
     // `DenyAll`, which cannot consent to anything, so a machine-readable
@@ -92,14 +111,46 @@ fn main() {
     // `DenyAll` are different types; the `DenyAll` variant is what makes the
     // "no prompt in a pipe" rule a compile-time fact about this function.
     let outcome = if parsed.json || !Prompt::is_interactive() {
-        run(&parsed, engine, &mut DenyAll, always_confirm)
+        run_configured(
+            &parsed,
+            &config,
+            engine,
+            &mut DenyAll,
+            always_confirm,
+            transport.as_deref(),
+            on_progress,
+        )
     } else {
-        run(&parsed, engine, &mut Prompt::stderr(), always_confirm)
+        run_configured(
+            &parsed,
+            &config,
+            engine,
+            &mut Prompt::stderr(),
+            always_confirm,
+            transport.as_deref(),
+            on_progress,
+        )
     };
 
     match outcome {
         Ok(output) => {
             if parsed.json {
+                // `--list-models` is a list, so its JSON is an array rather than
+                // the single object every command-producing mode emits. `run`
+                // assembled the human table; this path re-renders the same
+                // registry as JSON.
+                if matches!(parsed.mode, gcode::cli::Mode::ListModels) {
+                    match gcode::runtime::list_models_json() {
+                        Ok(json) => {
+                            println!("{json}");
+                            return;
+                        }
+                        Err(error) => {
+                            eprintln!("gcode: {error}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
                 // One object, one line, no colour, no prompt text anywhere.
                 println!("{}", output.to_json());
                 return;

@@ -35,17 +35,17 @@ publish = false
 default = []
 
 # Compiles the llama.cpp FFI boundary and the grammar-constrained decoder.
-# Empty until Phase 1.4 attaches llama-cpp-rs and llguidance, because those two
-# crates carry the real inference cost and Phase 0 must stay buildable without a
-# C++ toolchain. Kept as an explicit, named switch from the start so that the
-# "no model, no inference code" state is a reviewable decision and not an
-# accident. See ADR 0002 and ADR 0003.
+# Empty until Phase 1.5 and 1.6 attach llama-cpp-rs and llguidance, because those
+# two crates carry the real inference cost and the rest of the project must stay
+# buildable without a C++ toolchain. Kept as an explicit, named switch from the
+# start so that the "no model, no inference code" state is a reviewable decision
+# and not an accident. See ADR 0002 and ADR 0003.
 inference = []
 
 # Permits the model downloader to reach the network. This is the ONLY feature
 # allowed to enable an HTTP client, and CI asserts that the corresponding code
-# lives in exactly one file, src/model/download.rs. See ADR 0001.
-download = []
+# lives in exactly one file, src/model/download.rs. See ADR 0001 and ADR 0021.
+download = ["dep:ureq"]
 
 # Dependencies are declared as the modules that use them are written, not
 # up front. A crate listed here before it is used is an unbuilt, unaudited,
@@ -98,6 +98,17 @@ sha2 = "0.10"
 # Same authors, licence, and maintenance story as `serde` and `toml` above, which
 # are already in the tree. It adds no capability, only a format reader.
 serde_json = "1.0"
+
+# The one HTTP client in the tree, and it is optional on purpose (ADR 0001,
+# ADR 0021). It is reachable only through the `download` feature, and only
+# src/model/download.rs may name it; scripts/ci.sh fails the build if `ureq`
+# appears anywhere else. A build without `--features download` has no network
+# code and cannot reach out even by accident.
+#
+# rustls rather than native-tls so the binary does not link the platform TLS
+# stack: one static binary (ADR 0002) and no version skew between what the
+# downloader trusts and what the host happens to have installed.
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls"] }
 
 # The build script re-parses models/registry.toml to enforce ADR 0010's rules at
 # compile time. It needs the same parser the library does, so that a rule written

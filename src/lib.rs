@@ -109,7 +109,11 @@ impl Output {
 }
 
 /// Appends a JSON string literal, escaping what RFC 8259 requires.
-fn json_string(value: &str, out: &mut String) {
+///
+/// `pub(crate)` so the model registry can render its `--list-models --json`
+/// array with the same escaper this module uses for [`Output`], rather than a
+/// second copy that could disagree on an edge case.
+pub(crate) fn json_string(value: &str, out: &mut String) {
     out.push('"');
     for c in value.chars() {
         match c {

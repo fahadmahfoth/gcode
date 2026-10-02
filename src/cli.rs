@@ -63,6 +63,18 @@ pub struct Cli {
     #[arg(long, value_name = "CMD")]
     pub explain: Option<String>,
 
+    /// Print the model registry and exit. Needs no model and no network.
+    #[arg(long)]
+    pub list_models: bool,
+
+    /// Download a model from the registry, verify it, and exit.
+    ///
+    /// `--download-model` with no value fetches the configured model, or the
+    /// registry default. Naming one explicitly is how a user opts into a
+    /// different model without editing the config first.
+    #[arg(long, value_name = "NAME", num_args = 0..=1)]
+    pub download_model: Option<Option<String>>,
+
     /// Install the shell hook that records command history.
     #[arg(long)]
     pub init: bool,
@@ -164,6 +176,13 @@ pub enum Mode {
         /// The command to explain.
         command: String,
     },
+    /// Print the model registry.
+    ListModels,
+    /// Download and verify a model from the registry.
+    DownloadModel {
+        /// The registry name, or `None` for the configured or default model.
+        name: Option<String>,
+    },
     /// Install the shell hook.
     Init,
     /// Report the shell hook's installed state.
@@ -194,6 +213,8 @@ impl fmt::Display for Mode {
             Self::Fix => "fix",
             Self::Complete { .. } => "complete",
             Self::Explain { .. } => "explain",
+            Self::ListModels => "list-models",
+            Self::DownloadModel { .. } => "download-model",
             Self::Init => "init",
             Self::Check => "check",
             Self::Remove => "remove",
@@ -270,8 +291,8 @@ pub struct Parsed {
 
 /// The valid modes, as they appear in the conflict error. Kept in one place so
 /// that adding a mode and updating this string cannot drift apart.
-const MODE_CHOICES: &str = "--command/-c, --fix, --complete, --explain, --init, --check, \
-     --remove, or no arguments for interactive";
+const MODE_CHOICES: &str = "--command/-c, --fix, --complete, --explain, --list-models, \
+     --download-model, --init, --check, --remove, or no arguments for interactive";
 
 impl Cli {
     /// Validates the parsed flags and resolves them into a [`Parsed`].
@@ -365,6 +386,12 @@ impl Cli {
         if self.explain.is_some() {
             flags.push("--explain");
         }
+        if self.list_models {
+            flags.push("--list-models");
+        }
+        if self.download_model.is_some() {
+            flags.push("--download-model");
+        }
         if self.init {
             flags.push("--init");
         }
@@ -398,6 +425,12 @@ impl Cli {
             selected.push(Mode::Explain {
                 command: command.clone(),
             });
+        }
+        if self.list_models {
+            selected.push(Mode::ListModels);
+        }
+        if let Some(name) = &self.download_model {
+            selected.push(Mode::DownloadModel { name: name.clone() });
         }
         if self.init {
             selected.push(Mode::Init);
@@ -587,6 +620,51 @@ mod tests {
     }
 
     #[test]
+    fn list_models_is_its_own_mode() {
+        assert_eq!(
+            parse(&["gcode", "--list-models"]).unwrap().mode,
+            Mode::ListModels
+        );
+    }
+
+    #[test]
+    fn list_models_conflicts_with_a_command() {
+        let error = parse(&["gcode", "--list-models", "-c", "x"]).unwrap_err();
+        assert!(error.contains("--list-models"), "{error}");
+    }
+
+    #[test]
+    fn download_model_takes_an_optional_name() {
+        assert_eq!(
+            parse(&["gcode", "--download-model"]).unwrap().mode,
+            Mode::DownloadModel { name: None }
+        );
+        assert_eq!(
+            parse(&["gcode", "--download-model", "qwen3-0.6b"])
+                .unwrap()
+                .mode,
+            Mode::DownloadModel {
+                name: Some("qwen3-0.6b".to_owned())
+            }
+        );
+    }
+
+    #[test]
+    fn download_model_does_not_swallow_a_following_flag() {
+        // The value is optional, so `--download-model --json` must mean
+        // "download the default, as JSON", not "download a model named --json".
+        let parsed = parse(&["gcode", "--download-model", "--json"]).unwrap();
+        assert_eq!(parsed.mode, Mode::DownloadModel { name: None });
+        assert!(parsed.json);
+    }
+
+    #[test]
+    fn download_model_conflicts_with_a_command() {
+        let error = parse(&["gcode", "--download-model", "-c", "x"]).unwrap_err();
+        assert!(error.contains("--download-model"), "{error}");
+    }
+
+    #[test]
     fn every_pair_of_modes_is_refused() {
         // Guards against a future mode being added to `resolve_mode` but not
         // to this list, which would let the pair through unnoticed.
@@ -595,6 +673,8 @@ mod tests {
             vec!["--fix"],
             vec!["--complete", "x"],
             vec!["--explain", "x"],
+            vec!["--list-models"],
+            vec!["--download-model"],
             vec!["--init"],
             vec!["--check"],
             vec!["--remove"],
@@ -692,6 +772,19 @@ mod tests {
     #[test]
     fn no_shell_flag_means_detect_from_the_environment() {
         assert_eq!(parse(&["gcode", "--init"]).unwrap().shell, None);
+    }
+
+    #[test]
+    fn mode_display_names_the_list_models_mode() {
+        assert_eq!(Mode::ListModels.to_string(), "list-models");
+    }
+
+    #[test]
+    fn mode_display_names_the_download_model_mode() {
+        assert_eq!(
+            Mode::DownloadModel { name: None }.to_string(),
+            "download-model"
+        );
     }
 
     #[test]

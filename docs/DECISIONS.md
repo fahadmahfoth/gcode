@@ -61,6 +61,8 @@ How we will know it worked. The signal, and the number.
 | [0017](adr/0017-explicit-file-modes-over-umask.md) | Explicit file modes over umask | Accepted | 2026-10-01 |
 | [0018](adr/0018-bilingual-default-model.md) | Default model: qwen3-0.6b | Accepted | 2026-10-03 |
 | [0019](adr/0019-local-ci-not-github-actions.md) | Local CI, not GitHub Actions | Accepted | 2026-10-03 |
+| [0020](adr/0020-clipboard-via-platform-tool.md) | Copy to the clipboard by shelling out | Accepted | 2026-10-03 |
+| [0021](adr/0021-http-client-behind-a-feature.md) | One HTTP client, optional, confined to the downloader | Accepted | 2026-10-03 |
 
 ---
 

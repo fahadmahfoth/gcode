@@ -4,4 +4,5 @@
 //! non-interactive contexts. This is a thin, dependency-free module: it never
 //! reaches the model, and it does not read a credential store.
 
+pub mod progress;
 pub mod prompt;
