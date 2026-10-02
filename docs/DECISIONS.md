@@ -63,6 +63,7 @@ How we will know it worked. The signal, and the number.
 | [0019](adr/0019-local-ci-not-github-actions.md) | Local CI, not GitHub Actions | Accepted | 2026-10-03 |
 | [0020](adr/0020-clipboard-via-platform-tool.md) | Copy to the clipboard by shelling out | Accepted | 2026-10-03 |
 | [0021](adr/0021-http-client-behind-a-feature.md) | One HTTP client, optional, confined to the downloader | Accepted | 2026-10-03 |
+| [0022](adr/0022-no-signal-handler.md) | No signal handler; Ctrl+C is the process default | Accepted | 2026-10-03 |
 
 ---
 

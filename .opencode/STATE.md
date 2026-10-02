@@ -19,8 +19,9 @@ first_incomplete_task: 1.5
 #
 # 3.1-3.5, 3.7, and 3.8 are written, tested, and passing. 3.6 has its keymap, the
 # default-to-no behaviour, the non-interactive refusal, re-prompting after an
-# edit, and (new) the clipboard key `c` via a platform tool (ADR 0020). Still open
-# in phase 3: Ctrl+C handling and the MEDIUM+ cost estimate. Phase 3 stays
+# edit, the clipboard key `c` via a platform tool (ADR 0020), and Ctrl+C resolved
+# as the process default with no handler (ADR 0022). The only open phase-3 item is
+# the MEDIUM+ cost estimate, which needs a model to estimate. Phase 3 stays
 # in_progress, not done.
 
 # Phases, in order. `next` is the only actionable one.
@@ -64,8 +65,9 @@ phases:
     name: "Safety layer"
     # 3.1-3.5, 3.7, 3.8 written and verified, and 3.6 has its keymap, the
     # default-to-no behaviour, the non-interactive refusal, re-prompting after an
-    # edit, and the clipboard key `c` (ADR 0020). Still open: Ctrl+C handling and
-    # the MEDIUM+ cost estimate. Coverage is measured and above target.
+    # edit, the clipboard key `c` (ADR 0020), and Ctrl+C as the process default
+    # (ADR 0022). The only open item is the MEDIUM+ cost estimate, which needs a
+    # model. Coverage is measured and above target.
     status: in_progress
   - id: 4
     name: "Packaging"
@@ -195,13 +197,13 @@ last_command: "scripts/ci.sh (fmt, clippy, cargo test --all-features, cargo buil
   `download` feature, ADR 0021) with byte-range resume and a stderr progress line.
   What remains unproven is the model itself: every entry is `verified = false`,
   so a real download+hash is still the 🔒 step (ADR 0010).
-- Ctrl+C (ROADMAP 3.6) is still open and has no implementation. The default
-  SIGINT already terminates the process (exit 130), which is what the man page
-  means by "Ctrl+C cancels the invocation", and a killed download leaves its
-  resumable `.part` intact. A decision is pending: either record that the
-  process default is the answer (an ADR), or add a cooperative-cancel
-  handler around the downloader with a `ctrlc` dependency. The prompt cannot be
-  unblocked by a flag alone because `read_line` retries on EINTR.
+- Ctrl+C (ROADMAP 3.6) is resolved by decision, not by code: ADR 0022 records
+  that gcode installs no signal handler and lets the operating system default
+  terminate the process (`128 + SIGINT`). A `ctrlc` handler is process-wide and
+  would swallow Ctrl+C at the prompt, where `read_line` retries on `EINTR` so a
+  flag cannot unblock it; the handler bought for the downloader would regress the
+  prompt. The default already leaves a resumable `.part`. No dependency, no
+  `unsafe`, no handler.
 - Phase 1.5's timeout is not a wall clock. It uses `std::thread::scope`, which
   joins the generation thread, so a model that never finishes will not be
   abandoned at the deadline. A real timeout needs `CancellationToken` or an

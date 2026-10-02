@@ -46,9 +46,12 @@ This rule is what keeps the documentation honest — see
   - A build without the `download` feature reports `DownloadUnavailable` rather
     than doing nothing; `no_model` in the config refuses the download.
 
-- `docs/adr/0020-clipboard-via-platform-tool.md` and
-  `docs/adr/0021-http-client-behind-a-feature.md`, with rows in
-  [docs/DECISIONS.md](docs/DECISIONS.md).
+- `docs/adr/0020-clipboard-via-platform-tool.md`,
+  `docs/adr/0021-http-client-behind-a-feature.md`, and
+  `docs/adr/0022-no-signal-handler.md`, with rows in
+  [docs/DECISIONS.md](docs/DECISIONS.md). ADR 0022 records that Ctrl+C is the
+  process default: no handler (which would swallow the signal at the prompt), and
+  an interrupted download still resumes from its `.part`.
 
 - `shell/gcode.bash` (Phase 2.3): the bash history hook. One JSONL line per prompt,
   with the command, its exit status, the working directory, and the timestamp —

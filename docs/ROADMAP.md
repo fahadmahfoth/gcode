@@ -47,7 +47,7 @@ machine-readable pointer.
 | [0](#phase-0--repository-foundation) | Repository foundation | 🟡 in progress | Yes |
 | [1](#phase-1--core-inference-pipeline) | Core inference pipeline | 🟡 in progress | Yes |
 | [2](#phase-2--shell-integration) | Shell integration & history | 🟢 shipped; acceptance pending | Yes |
-| [3](#phase-3--safety-layer) | Safety layer | 🟡 3.6 has two items open | Yes |
+| [3](#phase-3--safety-layer) | Safety layer | 🟡 3.6 has one item open | Yes |
 | [4](#phase-4--packaging) | Packaging | ⬜ not started | Yes |
 | [5](#phase-5--distribution--cicd) | Distribution & CI/CD | ⬜ not started | No |
 | [6](#phase-6--polish--launch) | Polish & launch | ⬜ not started | No |
@@ -687,8 +687,8 @@ is deliberately no test that runs the whole binary against the real home.
 
 ## Phase 3 — Safety layer
 
-**Status: 🟡 3.1–3.5, 3.7, 3.8 shipped. 3.6 mostly; two items open
-(`Ctrl+C` and the `MEDIUM+` cost estimate).**
+**Status: 🟡 3.1–3.5, 3.7, 3.8 shipped. 3.6 mostly; one item open (the `MEDIUM+`
+cost estimate, which needs a model).**
 **Goal: a CRITICAL command is unrunnable, and editing cannot bypass it.**
 
 See [SAFETY.md](SAFETY.md) for the full model. This is the build list.
@@ -776,11 +776,13 @@ See [SAFETY.md](SAFETY.md) for the full model. This is the build list.
 
 - [x] Keys: `y n e c ? r`. All are handled; `c` copies to the clipboard by
       shelling out to the platform tool (ADR 0020)
-- [ ] `Ctrl+C` cancels — **not implementable as written.** The crate is
-      `#![forbid(unsafe_code)]`, so the signal handler libc would need is out,
-      and the portable alternative is a new dependency. Both are decisions this
-      repository has not recorded, so the key is left open rather than faked with
-      a `?` loop that a user would read as working
+- [x] `Ctrl+C` cancels — resolved as the **operating-system default**, with no
+      handler installed (ADR 0022). The crate forbids the `unsafe` a `libc`
+      handler needs, a `ctrlc` handler is process-wide and would swallow Ctrl+C at
+      the prompt (where `read_line` retries on `EINTR`, so a flag cannot unblock
+      it), and the default already terminates with `128 + SIGINT` and leaves the
+      resumable `.part` intact. A custom message would not be worth that
+      regression
 - [x] Shows the command, the level, and every reason. The reasons are not
       decoration: "MEDIUM" alone does not tell a user whether it is their own
       project directory or someone else's home
