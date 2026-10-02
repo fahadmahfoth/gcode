@@ -171,7 +171,7 @@ It does not mean "skip the safety system."
 | Prompt injection via hostile filenames or history | Untrusted-data delimiters, redaction, grammar, and an independent classifier |
 | History leaking secrets into a prompt | Redaction before assembly; 2 KB output cap; 15-entry cap |
 | Accidental `rm -rf /` | CRITICAL blocklist, unreachable by any flag |
-| Hook breaking the user's shell | Idempotent install, preserves existing hooks, `--init --remove` |
+| Hook breaking the user's shell | Idempotent install, preserves existing hooks, byte-precise `--remove` |
 | Supply chain compromise | `cargo-deny`, `cargo-audit`, `cargo-vet` in CI, no `[patch]` from outside |
 | Log file readable by other users | `0600` on history, explicit umask on the data dir |
 | Ctrl-C leaving a half-written history entry | Single `write` + `fsync` of one line; a torn line is skipped on read |
@@ -194,7 +194,7 @@ It does not mean "skip the safety system."
 If `gcode --init` ever disturbs your prompt:
 
 ```bash
-gcode --init --remove
+gcode --remove
 exec $SHELL          # or open a new terminal
 ```
 

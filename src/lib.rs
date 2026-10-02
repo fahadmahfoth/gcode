@@ -25,6 +25,9 @@ pub mod model;
 /// The run loop: request in, `Output` out.
 pub mod runtime;
 
+/// Shell hook installation. Writes only inside its own markers (ADR 0007).
+pub mod shell;
+
 /// Independent risk classification. Never imports the model (ADR 0004).
 pub mod safety;
 pub mod ui;
@@ -91,6 +94,15 @@ impl Output {
         }
         out.push_str("],\"executed\":");
         out.push_str(if self.executed { "true" } else { "false" });
+        // Always present, null when there is none. A key that appears only
+        // sometimes makes a consumer guess whether it was omitted or empty, and
+        // for the hook modes the explanation is the whole result — leaving it out
+        // would make `gcode --json --init` print an object that says nothing.
+        out.push_str(",\"explanation\":");
+        match &self.explanation {
+            Some(text) => json_string(text, &mut out),
+            None => out.push_str("null"),
+        }
         out.push('}');
         out
     }

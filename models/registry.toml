@@ -9,45 +9,67 @@
 # model gcode has ever been willing to download.
 #
 # ---------------------------------------------------------------------------
-# THIS FILE IS A PLACEHOLDER. DO NOT SHIP IT.
+# The `verified` field is a promise to the user and a release gate.
 # ---------------------------------------------------------------------------
 #
-# Every field below is filled with values that are syntactically valid and
-# deliberately useless:
+# `verified = true` means the maintainer downloaded this exact file, hashed it,
+# and confirmed the digest matches `sha256`. It is the act ADR 0010 requires.
+# `build.rs` refuses a *release* build while any entry is `verified = false`, so
+# a model whose checksum only came from a web page cannot ship by accident.
+# Debug builds and the test suite are unaffected, so `cargo test` and a local
+# run work before the download.
 #
-#   sha256  the SHA-256 of the empty string. It is the well-known value of that
-#           literal, and it can never be the checksum of a 400 MB model file.
-#   url     an .invalid host, which RFC 2606 reserves and which can never resolve.
-#   name    says PLACEHOLDER in it, so a grep finds it.
+# URLs are pinned to a Hugging Face commit, not a branch, so the bytes behind a
+# URL cannot change. The `sha256` values below are the content hashes Hugging
+# Face publishes in its git-LFS pointers for that commit; they are recorded here
+# so the download can be checked, but they are not yet `verified` until that
+# download is done once.
 #
-# The reason it is here at all is that include_str! needs a file to exist, and a
-# missing one fails with "file not found" and no explanation. Shipping a
-# structurally valid file that says so is more useful than an absent one.
-#
-# build.rs refuses this digest in a release build, and refuses it with a message
-# saying why. Before any release, replace the entry below with a real model, and
-# verify the checksum by actually downloading the file once. A checksum copied
-# from a blog post is not a checksum; it is a rumour with a filename.
-#
-# The fields, once real:
+# The fields:
 #
 #   name                  what the user types after --use-model; kebab-case
 #   description           one line for --list-models
-#   url                   direct HTTPS download URL
+#   url                   direct HTTPS download URL, commit-pinned
 #   sha256                lowercase hex, 64 characters, required
 #   size_bytes            shown before the download so it can be declined
 #   default               exactly one entry may set this
 #   context_size          native window, 512..=32768
 #   recommended_threads   a hint, never applied automatically
 #   license               SPDX identifier
+#   verified              true once the maintainer has hashed the file itself
 
 [[model]]
-name        = "placeholder-unverified"
-description = "PLACEHOLDER. Not a real model. Replaced before any release."
-url         = "https://models.invalid/placeholder-unverified.gguf"
-sha256      = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-size_bytes  = 1
+name        = "qwen3-0.6b"
+description = "Default. Small, fast, and multilingual (Arabic + English)."
+url         = "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-Q4_K_M.gguf"
+sha256      = "ac2d97712095a558e31573f62f466a3f9d93990898b0ec79d7c974c1780d524a"
+size_bytes  = 396705472
 default     = true
-context_size = 4096
-recommended_threads = 1
-license     = "NONE-PLACEHOLDER"
+context_size = 32768
+recommended_threads = 4
+license     = "Apache-2.0"
+verified    = false
+
+[[model]]
+name        = "kitty-bash-llm"
+description = "English-only shell specialist; the fastest and most accurate at shell."
+url         = "https://huggingface.co/sahellx/kitty-bash-llm/resolve/d05611f3c23d335a784a34600dfaed2d907db814/kitty-bash-llm-q4_k_m.gguf"
+sha256      = "2ce919b9c7632721396b2cd37fd1801dcd084f94162c398b0b2f8731cabf8119"
+size_bytes  = 397807424
+default     = false
+context_size = 32768
+recommended_threads = 4
+license     = "Apache-2.0"
+verified    = false
+
+[[model]]
+name        = "qwen3-1.7b"
+description = "Accuracy-first multilingual model. Slower, larger, more capable."
+url         = "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/d7f544eead698dbd1f15126ef60b45a1e1933222/Qwen3-1.7B-Q4_K_M.gguf"
+sha256      = "b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897"
+size_bytes  = 1107409472
+default     = false
+context_size = 32768
+recommended_threads = 4
+license     = "Apache-2.0"
+verified    = false

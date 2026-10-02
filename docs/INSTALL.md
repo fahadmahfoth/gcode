@@ -147,20 +147,22 @@ path handling and history capture break in confusing ways.
 
 ```bash
 gcode --init          # detect shell, install hooks, idempotent
-gcode --init --check  # report status without changing anything
-gcode --init --remove # uninstall hooks
+gcode --check         # report status without changing anything
+gcode --remove        # uninstall hooks
 ```
 
-The hook captures the last command, its exit code, and its output tail into
-`~/.gcode/history.jsonl`. It is what makes `gcode --fix` and context-aware
-generation work. The hook:
+The hook captures the last command, its exit code, the working directory, and the
+timestamp into `~/.gcode/history.jsonl`. It is what makes `gcode --fix` and
+context-aware generation work. Output is deliberately not captured, so that the
+hook cannot make `[ -t 1 ]` false and degrade colour, pagers, and editors for
+every command the user runs. The hook:
 
 - Preserves any existing `PROMPT_COMMAND` / `precmd` hooks.
 - Skips gcode's own commands (no self-referential history).
 - Costs under 5 ms per prompt.
 - Writes nothing if `GCODE_NO_HISTORY=1` is set.
 
-If it ever breaks your prompt, `gcode --init --remove` fixes it, and
+If it ever breaks your prompt, `gcode --remove` fixes it, and
 [SAFETY.md § Recovery](SAFETY.md#recovery-when-a-hook-goes-wrong) covers the
 manual repair.
 
@@ -189,7 +191,7 @@ See [MODELS.md](MODELS.md) for the full registry, custom model setup, and tuning
 ## Uninstall
 
 ```bash
-gcode --init --remove                      # shell hooks first
+gcode --remove                             # shell hooks first
 rm -f ~/.config/gcode/config.toml          # config (keeps history)
 rm -f ~/.gcode/history.jsonl               # history
 rm -f ~/.local/share/gcode/models/*.gguf   # model cache, Linux
@@ -244,6 +246,6 @@ every platform is easier to document and easier to remember.
 | Installer aborts on checksum | proxy or mirror truncated download | retry, or use the package manager |
 | macOS blocks the binary | Gatekeeper quarantine | see [TROUBLESHOOTING.md § Gatekeeper](TROUBLESHOOTING.md#macos-blocks-the-binary-gatekeeper) |
 | Model download stalls | network policy | set `GCODE_MODEL_MIRROR`, see [MODELS.md](MODELS.md#mirrors) |
-| Prompt looks broken after `--init` | hook conflict | `gcode --init --remove`, then file an issue with `gcode doctor` output |
+| Prompt looks broken after `--init` | hook conflict | `gcode --remove`, then file an issue with `gcode doctor` output |
 
 Full symptom table: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).

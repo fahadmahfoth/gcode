@@ -63,6 +63,22 @@ pub struct Cli {
     #[arg(long, value_name = "CMD")]
     pub explain: Option<String>,
 
+    /// Install the shell hook that records command history.
+    #[arg(long)]
+    pub init: bool,
+
+    /// Report whether the shell hook is installed, and which version.
+    #[arg(long)]
+    pub check: bool,
+
+    /// Remove the shell hook block and its files.
+    #[arg(long)]
+    pub remove: bool,
+
+    /// Shell to install for. Defaults to $SHELL.
+    #[arg(long, value_name = "SHELL", value_enum)]
+    pub shell: Option<ShellFlag>,
+
     /// Skip the confirmation prompt. Still classifies, still logs.
     #[arg(short = 'y', long)]
     pub yes: bool,
@@ -148,8 +164,22 @@ pub enum Mode {
         /// The command to explain.
         command: String,
     },
+    /// Install the shell hook.
+    Init,
+    /// Report the shell hook's installed state.
+    Check,
+    /// Remove the shell hook.
+    Remove,
     /// Interactive prompt loop.
     Interactive,
+}
+
+impl Mode {
+    /// Whether this mode is one of the three shell-integration modes.
+    #[must_use]
+    pub fn is_shell_hook(&self) -> bool {
+        matches!(self, Self::Init | Self::Check | Self::Remove)
+    }
 }
 
 impl fmt::Display for Mode {
@@ -164,6 +194,9 @@ impl fmt::Display for Mode {
             Self::Fix => "fix",
             Self::Complete { .. } => "complete",
             Self::Explain { .. } => "explain",
+            Self::Init => "init",
+            Self::Check => "check",
+            Self::Remove => "remove",
             Self::Interactive => "interactive",
         };
         f.write_str(name)
@@ -228,12 +261,17 @@ pub struct Parsed {
     pub no_color: bool,
     /// Directory to build context as if running in.
     pub in_dir: Option<PathBuf>,
+    /// The shell the hook modes act on. `None` means read `$SHELL`.
+    ///
+    /// Kept as the resolved [`Kind`](crate::shell::Kind) rather than the flag
+    /// type so nothing downstream has to know which spelling came from where.
+    pub shell: Option<crate::shell::Kind>,
 }
 
 /// The valid modes, as they appear in the conflict error. Kept in one place so
 /// that adding a mode and updating this string cannot drift apart.
-const MODE_CHOICES: &str =
-    "--command/-c, --fix, --complete, --explain, or no arguments for interactive";
+const MODE_CHOICES: &str = "--command/-c, --fix, --complete, --explain, --init, --check, \
+     --remove, or no arguments for interactive";
 
 impl Cli {
     /// Validates the parsed flags and resolves them into a [`Parsed`].
@@ -272,6 +310,17 @@ impl Cli {
             }
         }
 
+        // `--shell` only means something to the hook modes. Accepting
+        // `gcode --shell zsh` on its own would imply an install that never
+        // happens, which is the "looks like it did something" failure this
+        // project treats as a bug.
+        if self.shell.is_some() && !mode.is_shell_hook() {
+            return Err(format!(
+                "--shell only applies to --init, --check, and --remove; \
+                 choose one of {MODE_CHOICES}"
+            ));
+        }
+
         Ok(Parsed {
             mode,
             // `--no` is documented as an alias of `--dry-run`. Keeping them
@@ -291,6 +340,7 @@ impl Cli {
             json: self.json,
             no_color: self.no_color,
             in_dir: self.in_dir,
+            shell: self.shell.map(Into::into),
         })
     }
 
@@ -314,6 +364,15 @@ impl Cli {
         }
         if self.explain.is_some() {
             flags.push("--explain");
+        }
+        if self.init {
+            flags.push("--init");
+        }
+        if self.check {
+            flags.push("--check");
+        }
+        if self.remove {
+            flags.push("--remove");
         }
         flags
     }
@@ -339,6 +398,15 @@ impl Cli {
             selected.push(Mode::Explain {
                 command: command.clone(),
             });
+        }
+        if self.init {
+            selected.push(Mode::Init);
+        }
+        if self.check {
+            selected.push(Mode::Check);
+        }
+        if self.remove {
+            selected.push(Mode::Remove);
         }
 
         match selected.len() {
@@ -397,6 +465,28 @@ where
             }
             _ => ParseOutcome::Usage(error.to_string()),
         }),
+    }
+}
+
+/// The shells `--shell` accepts.
+///
+/// A local enum rather than `crate::shell::Kind` so this module owns its own
+/// flag surface: the conversion lives in `resolve_shell` and the error it
+/// produces names the value the user typed, not an internal type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ShellFlag {
+    /// bash, hooked via `PROMPT_COMMAND`.
+    Bash,
+    /// zsh, hooked via `precmd_functions`.
+    Zsh,
+}
+
+impl From<ShellFlag> for crate::shell::Kind {
+    fn from(flag: ShellFlag) -> Self {
+        match flag {
+            ShellFlag::Bash => Self::Bash,
+            ShellFlag::Zsh => Self::Zsh,
+        }
     }
 }
 
@@ -505,6 +595,9 @@ mod tests {
             vec!["--fix"],
             vec!["--complete", "x"],
             vec!["--explain", "x"],
+            vec!["--init"],
+            vec!["--check"],
+            vec!["--remove"],
         ];
         for a in &flags {
             for b in &flags {
@@ -528,6 +621,84 @@ mod tests {
         for expected in ["--command", "--fix", "--complete", "--explain"] {
             assert!(error.contains(expected), "missing {expected}: {error}");
         }
+    }
+
+    #[test]
+    fn the_three_hook_modes_are_parsed() {
+        assert_eq!(parse(&["gcode", "--init"]).unwrap().mode, Mode::Init);
+        assert_eq!(parse(&["gcode", "--check"]).unwrap().mode, Mode::Check);
+        assert_eq!(parse(&["gcode", "--remove"]).unwrap().mode, Mode::Remove);
+    }
+
+    #[test]
+    fn hook_modes_are_modes_not_side_effects() {
+        // They must not fall through to Interactive, or `gcode --init` would open
+        // a prompt loop in the middle of installing a hook.
+        for mode in [Mode::Init, Mode::Check, Mode::Remove] {
+            assert!(
+                mode.is_shell_hook(),
+                "{mode} is not recognised as a hook mode"
+            );
+        }
+        assert!(!Mode::Interactive.is_shell_hook());
+        assert!(!Mode::Fix.is_shell_hook());
+    }
+
+    #[test]
+    fn a_hook_mode_reaches_the_conflict_error() {
+        // `--init --remove` is the one combination a user might reasonably type
+        // after a botched install. It is refused, and both flags are named.
+        let error = parse(&["gcode", "--init", "--remove"]).unwrap_err();
+        assert!(error.contains("--init"), "does not name the first: {error}");
+        assert!(
+            error.contains("--remove"),
+            "does not name the second: {error}"
+        );
+    }
+
+    #[test]
+    fn the_shell_flag_is_accepted_for_the_hook_modes() {
+        use crate::shell::Kind;
+        let cases: [(&[&str], Kind); 4] = [
+            (&["gcode", "--init", "--shell", "bash"], Kind::Bash),
+            (&["gcode", "--init", "--shell", "zsh"], Kind::Zsh),
+            (&["gcode", "--check", "--shell", "zsh"], Kind::Zsh),
+            (&["gcode", "--remove", "--shell", "bash"], Kind::Bash),
+        ];
+        for (args, expected) in cases {
+            assert_eq!(parse(args).unwrap().shell, Some(expected), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn the_shell_flag_alone_is_refused() {
+        // Otherwise `gcode --shell zsh` implies an install that never happens.
+        for args in [
+            vec!["gcode", "--shell", "zsh"],
+            vec!["gcode", "--shell", "bash", "-c", "list files"],
+        ] {
+            let error = parse(&args).unwrap_err();
+            assert!(error.contains("--shell"), "unclear: {error}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_shell_is_rejected_by_clap() {
+        // Not a fallback to a default. Writing a bash hook into a fish config
+        // would leave a shell that silently records nothing.
+        assert!(parse(&["gcode", "--init", "--shell", "fish"]).is_err());
+    }
+
+    #[test]
+    fn no_shell_flag_means_detect_from_the_environment() {
+        assert_eq!(parse(&["gcode", "--init"]).unwrap().shell, None);
+    }
+
+    #[test]
+    fn mode_display_names_the_hook_modes() {
+        assert_eq!(Mode::Init.to_string(), "init");
+        assert_eq!(Mode::Check.to_string(), "check");
+        assert_eq!(Mode::Remove.to_string(), "remove");
     }
 
     #[test]
@@ -556,6 +727,15 @@ mod tests {
             "does not name the first: {error}"
         );
         assert!(error.contains("--fix"), "does not name the second: {error}");
+    }
+
+    #[test]
+    fn help_documents_the_hook_flags() {
+        // A flag missing from --help is a flag nobody can find.
+        let output = handled(&["gcode", "--help"]).expect("--help must be handled");
+        for flag in ["--init", "--check", "--remove", "--shell"] {
+            assert!(output.contains(flag), "help omits {flag}");
+        }
     }
 
     #[test]

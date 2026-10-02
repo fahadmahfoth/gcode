@@ -45,12 +45,12 @@ machine-readable pointer.
 | Phase | Name | Status | Blocks the next? |
 |---|---|---|---|
 | [0](#phase-0--repository-foundation) | Repository foundation | 🟡 in progress | Yes |
-| [1](#phase-1--core-inference-pipeline) | Core inference pipeline | ⬜ | Yes |
-| [2](#phase-2--shell-integration) | Shell integration & history | ⬜ | Yes |
-| [3](#phase-3--safety-layer) | Safety layer | ⬜ | Yes |
-| [4](#phase-4--packaging) | Packaging | ⬜ | Yes |
-| [5](#phase-5--distribution--cicd) | Distribution & CI/CD | ⬜ | No |
-| [6](#phase-6--polish--launch) | Polish & launch | ⬜ | No |
+| [1](#phase-1--core-inference-pipeline) | Core inference pipeline | 🟡 in progress | Yes |
+| [2](#phase-2--shell-integration) | Shell integration & history | 🟢 shipped; acceptance pending | Yes |
+| [3](#phase-3--safety-layer) | Safety layer | 🟡 3.6 has three items open | Yes |
+| [4](#phase-4--packaging) | Packaging | ⬜ not started | Yes |
+| [5](#phase-5--distribution--cicd) | Distribution & CI/CD | ⬜ not started | No |
+| [6](#phase-6--polish--launch) | Polish & launch | ⬜ not started | No |
 | [7](#phase-7--reliability) | Reliability hardening | ⛔ planned | No |
 | [8](#phase-8--shell-coverage) | Shell coverage: fish, nushell | ⛔ planned | No |
 | [9](#phase-9--agentic-mode) | Agentic multi-step execution | ⛔ planned | No |
@@ -64,7 +64,8 @@ only so the design decisions of v1.0 do not paint us into a corner.
 ## Phase 0 — Repository foundation
 
 **Status: 🟡 in progress — the Rust half builds, tests, and lints clean on macOS
-aarch64; Linux x86_64 and the CI run are still unverified**
+aarch64; the local CI gate runs there. Linux x86_64 is still unverified because
+this project no longer uses GitHub Actions ([ADR 0019](adr/0019-local-ci-not-github-actions.md)) and no Linux machine has run the gate.**
 **Goal: a repository where `cargo build` works on a maintainer's laptop.**
 
 ### Tasks
@@ -78,41 +79,40 @@ aarch64; Linux x86_64 and the CI run are still unverified**
 | 0.5 | Path resolution | `src/utils/paths.rs` | ✅ 4 env overrides, 22 unit tests |
 | 0.6 | Lint + format config | `.rustfmt.toml`, `.clippy.toml` | ✅ `pedantic` clean |
 | 0.7 | Gitignore, deny list | `.gitignore` | ✅ |
-| 0.8 | CI: fmt, clippy, test, build matrix | `.github/workflows/ci.yml` | 🟡 written, never executed |
+| 0.8 | CI: fmt, clippy, test, policy greps | `scripts/ci.sh` | ✅ runs green on macOS aarch64; Linux ⬜ |
 | 0.9 | Licence, contributing, security policy | `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md` | ✅ |
 | 0.10 | Documentation set | `docs/**` | ✅ |
 | 0.11 | OpenCode agent + command tooling | `.opencode/**`, `AGENTS.md` | ✅ |
-| 0.12 | GitHub templates, secret scanning | `.github/**` | 🟡 written, never executed |
+| 0.12 | Issue/PR templates, local secret scan | `.github/**`, `scripts/ci.sh` | ✅ |
 
 ### Acceptance criteria
 
 - [ ] `cargo build --release` succeeds on Linux x86_64 **and** macOS aarch64
-      — ✅ macOS aarch64 (rustc 1.98.1). ⬜ Linux x86_64 not built yet.
+      — ⛔ a release build is now refused while any registry entry is
+      `verified = false` ([ADR 0018](adr/0018-bilingual-default-model.md)),
+      which is the current state. The debug build passes on macOS aarch64;
+      Linux is unverified. Clearing this needs one real model download and
+      hash, then flipping `verified = true`.
 - [x] `cargo test` passes — 34 passed, 0 failed
 - [x] `cargo fmt --check` and `cargo clippy -D warnings` are clean
-- [ ] CI runs green on a push
-      — ⛔ **blocked on the account, not the code.** A push to `master` now
-      produces a run, which it never did before, but every job is refused with
-      *"The job was not started because your account is locked due to a billing
-      issue"* (run `36765649289`). No workflow edit can clear that.
+- [x] The local CI gate exits zero — `./scripts/ci.sh`
+      — ✅ macOS aarch64 (fmt, clippy, test, greps, docs). ⬜ Linux x86_64:
+      no machine has run it yet.
 - [x] `README.md`, `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md` present
 - [x] No credential-shaped string anywhere in the tracked tree
 - [x] `AGENTS.md` tells an agent what to do next
 
-Two of the four unchecked items are things only CI can settle: a Linux build and
-a green run. A workflow that has never run is not a passing workflow, so 0.8 and
-0.12 stay 🟡 no matter how confident the YAML looks.
-
-The push trigger was one of those two blockers and is now fixed: it named
-`main` and `develop`, but the default branch is `master`, so nothing had ever
-triggered a run. That is corrected and a run now appears on every push. The run
-itself fails for a reason outside the repository — GitHub is refusing to start
-jobs on this account.
+One unchecked item remains: a Linux x86_64 build. The project moved off GitHub
+Actions ([ADR 0019](adr/0019-local-ci-not-github-actions.md)) after the account
+was locked for billing, so there is no hosted runner to settle it. A workflow
+that has never run is not a passing workflow; `scripts/ci.sh` runs locally
+instead, and its printed output is the evidence.
 
 ### What unblocks this phase
 
-Clearing the GitHub Actions billing lock, so 0.8 can run on both platforms and
-settle the two remaining criteria. Nothing in this repository can do that.
+Running `scripts/ci.sh` on a Linux x86_64 machine, or adding a self-hosted
+runner for it. The macOS half is green; nothing in this repository can produce a
+Linux result by itself.
 
 ### Note on task 0.1
 
@@ -150,9 +150,10 @@ real dispatch in 1.1 lands in a tested function rather than in `main`.
 
 ## Phase 1 — Core inference pipeline
 
-**Status: 🟡 1.2–1.5 and 1.7 done. 1.8's run loop, `--dry-run`, and `--json` are
-done and tested against a `FakeEngine`; the CLI cannot generate anything yet,
-because there is no model**
+**Status: 🟡 1.1–1.4, 1.7, and 1.8 done. 1.5 is complete except the sampler
+(`LlamaEngine::load` + stop conditions), which is blocked on `llama-cpp-rs`, a C++
+toolchain, and real weights. 1.6 (grammar) is not started and depends on 1.5. The
+CLI cannot generate anything yet, because there is no model**
 **Goal: `gcode -c "list all files" --dry-run` prints a valid command and exits.**
 
 This is the phase that decides whether the project is real. Nothing else matters
@@ -389,6 +390,11 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
       `Output::to_json` for the same reason the prompt is: no serde at MSRV 1.75
 - [x] **Test:** `run()` with a `FakeEngine` produces the expected `Output`
       (`tests/runtime.rs::run_with_a_fake_engine_produces_the_expected_output`)
+- [x] Every generative mode (`--generate`, `--fix`, `--complete`) assembles its
+      prompt with `build_prompt`, so the request and any failure output are
+      redacted (ADR 0006) and wrapped in the system instruction rather than the raw
+      string being handed to the model. The environment `Context` stays default
+      until Phase 1.5 wires it
 
 ### Acceptance criteria
 
@@ -421,7 +427,7 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
 
 ## Phase 2 — Shell integration & history
 
-**Status: 🚧 in progress — 2.1 and 2.2 done, 2.3–2.7 not started**
+**Status: 🟢 2.1–2.6 shipped; two acceptance criteria wait on CI billing and the Phase 1.5 engine.**
 **Goal: `gcode --fix` works because the tool knows what just failed.**
 
 ### 2.1 History storage — `src/context/history.rs`
@@ -497,79 +503,180 @@ a tested format.
       both an XML attribute break and a secret-shaped value arriving redacted and
       escaped
 
-**Not wired, and not a gap:** `build_prompt` still has no production caller until
-Phase 1.5 lands the sampler, so nothing calls `EnvSnapshot::collect` at runtime yet.
-The same is true of the history store in 2.1, and for the same reason — these are the
-parts of the pipeline that can be built and tested ahead of the engine that will
-consume them. Measured coverage: `context/env.rs` 94.51 % of lines, 94.98 % of
-regions, and the workspace total rose from 92.57 % to 93.0 % of lines.
+**Partly wired.** `build_prompt` is now called by `--generate`, `--fix`, and
+`--complete`, and `--fix` reads the history store, so the request, a failed
+command, and its output are all redacted before the model sees them. The
+*environment* half is still ahead: the run loop builds no environment `Context`,
+so prompts are assembled with `Context::default()` and nothing calls
+`EnvSnapshot::collect` at runtime until Phase 1.5 wires the engine and its context.
+Measured coverage: `context/env.rs` 96.34 % of lines, and the workspace total is
+above 92 %.
 
 ### 2.3 Bash hook — `shell/gcode.bash`
 
-```bash
-_gcode_capture() {
-    local exit_code=$?
-    local last_cmd
-    last_cmd=$(HISTTIMEFORMAT= history 1 | sed 's/^ *[0-9]* *//')
-    # skip gcode's own commands, skip duplicates, preserve $? for the user
-    ...
-}
-```
+- [x] Captures the last command, `$?`, `cwd`, and `ts`
+- [x] **Preserves the user's `$?`** — `local status=$?` on one statement, and the
+      status is returned before the hook returns. A dedicated test asserts a
+      failing command is recorded with its real code and that the user still sees
+      their own `$?`
+- [x] Pre-existing `PROMPT_COMMAND` is chained, never replaced. Both the string
+      form and the array form (bash 5.1+) are handled
+- [x] Skips commands starting with `gcode` or `_gcode`, and skips a repeat of the
+      previous entry so an empty prompt does not duplicate it
+- [x] Respects `GCODE_NO_HISTORY=1`, read per prompt rather than at load time
+- [x] Under 5 ms; no `jq` dependency at all. Measured 2.2 ms per prompt on macOS
+      system bash 3.2 (best of 5 trials)
+- [x] Idempotent install: the `_GCODE_HOOK_LOADED` guard makes a second `source` a
+      no-op
+- [x] **Test:** sourced in a real bash, a failing command is recorded with the
+      right exit code and the user still sees their own `$?` — 27 tests in
+      `tests/hook_bash.rs`, all against `/bin/bash` 3.2
 
-- [ ] Captures last command, `$?`, `cwd`, and the last 2 KB of output
-- [ ] **Preserves the user's `$?`** — this is the single most common way a
-      history hook breaks a shell, and it must have a dedicated test
-- [ ] Preserves any pre-existing `PROMPT_COMMAND`
-- [ ] Skips commands starting with `gcode` or `_gcode`
-- [ ] Respects `GCODE_NO_HISTORY=1`
-- [ ] Under 5 ms; no `jq` hard dependency (uses it only if present)
-- [ ] Idempotent install
-- [ ] **Test:** sourced in a real bash, a failing command is recorded with the
-      right exit code and the user still sees their own `$?`
+**Deviation: output is not captured.** The acceptance criterion above says "the
+last 2 KB of output". Capturing output means redirecting the command's stdout, which
+makes `[ -t 1 ]` false for everything the user runs — `ls` drops its colour, `less`
+stops paging, and an editor refuses to start. That was measured, not assumed. A
+history hook that degrades every command in the terminal is a worse trade than a
+missing error message, so `out` is written empty and `--fix` will work from the
+command and its exit status. Revising this is a decision, not an implementation
+detail; it would need either a PTY-based capture or an ADR.
+
+**Correction: the hook is installed *before* the user's entries.** Appending it looks
+politer, but `PROMPT_COMMAND` entries run in sequence and each sees the previous
+one's status, so an appended capture records whatever the user's own hook last
+returned. With a `PROMPT_COMMAND` returning 7, every command in the store read
+`"exit":7`. That is caught by a test.
 
 ### 2.4 Zsh hook — `shell/gcode.zsh`
 
-- [ ] `precmd_functions` integration, not a bare `precmd` override
-- [ ] Same guarantees as bash
-- [ ] **Test:** same suite, sourced in a real zsh
+- [x] `precmd_functions` integration, array append, not a bare `precmd` override
+- [x] Same guarantees as bash. Measured 1.3 ms per prompt against the same 5 ms
+      budget
+- [x] **Test:** the same suite, sourced in a real zsh — 24 tests in
+      `tests/hook_zsh.rs`. Every test clears `HISTFILE` and passes `--no-rcs`, so
+      nothing reads the developer's `.zshrc` or their real history
+
+**zsh requires one different variable name.** `status` is a read-only special
+variable in zsh aliased to `?`, so `local status=$?` fails on the first line of the
+hook: the hook errors on every prompt and records nothing. The exit code is captured
+into `ret`. There is a test that fails if a `read-only variable` diagnostic ever
+appears in a prompt again.
+
+**Appending to `precmd_functions` is safe here, unlike bash.** zsh restores `$?` for
+each `precmd` hook, so a user's `precmd` that returns non-zero cannot corrupt the
+recorded status. Asserted rather than assumed, by a test with a `precmd` hook that
+returns 9.
 
 ### 2.5 `--init`
 
-- [ ] Detect the shell from `$SHELL`; support `--shell` to override
-- [ ] Append a marked block, idempotently:
+Implemented as three mutually exclusive modes — `--init`, `--check`, `--remove` —
+plus `--shell <bash|zsh>` to override the shell detected from `$SHELL`.
+
+- [x] Detect the shell from `$SHELL`; support `--shell` to override. An
+      unrecognised `$SHELL` is refused with `Error::UnsupportedShell` naming the
+      shell rather than guessing; `--shell fish` is refused at the argument layer
+      with the two accepted values
+- [x] Append a marked block, idempotently. The block is four lines, because a
+      version line is needed for `--check` to report *current* versus *out of date*:
 
 ```
 # >>> gcode init >>>
-source /usr/local/share/gcode/shell/gcode.bash
+# gcode hook 0.1.0
+source '/home/user/.gcode/shell/gcode.bash'
 # <<< gcode init <<<
 ```
 
-- [ ] `--check` reports installed/version/missing without changing anything
-- [ ] `--remove` deletes exactly the marked block, byte-precise
-- [ ] Refuses to write a file it cannot read
-- [ ] Prints the exact lines it added
-- [ ] **Test:** install twice → file is byte-identical to install once
-- [ ] **Test:** remove after install → file is byte-identical to before
-- [ ] **Test:** a user's own `PROMPT_COMMAND` survives install and remove
+- [x] The `source` line points at the gcode-owned copy under `~/.gcode/shell/`,
+      not at wherever the binary happens to live. The hook text is embedded in the
+      binary at compile time and written there on install, so moving or
+      repackaging the binary cannot break a user's prompt. `--remove` deletes the
+      block and then that file
+- [x] `--check` reports installed/version/missing without changing anything:
+      `not installed`, or `installed (current, version 0.1.0)` /
+      `installed (out of date, version X)`
+- [x] `--remove` deletes exactly the marked block, byte-precise. Removing the
+      block also removes exactly one preceding newline — the separator install
+      added — so install followed by remove restores the file byte-for-byte in
+      every case tested: empty file, a lone newline, a file with no trailing
+      newline, and a file with trailing blank lines
+- [x] Refuses to write a file it cannot read: an rc file that exists but cannot be
+      opened is `Error::ShellRcUnreadable`, and nothing is written
+- [x] A begin marker with no end marker is refused with
+      `Error::ShellBlockMalformed`, never repaired. Marker matching is line-exact,
+      so a hand-edited lookalike is not treated as the block
+- [x] Prints the exact lines it added, and only those; in `--json` the result
+      carries `"explanation"` alongside the otherwise-empty command shape
+- [x] **Test:** install twice → file is byte-identical to install once — plus the
+      reverse order, remove from a file that never had the block (a no-op), and a
+      round trip over a file whose only content is the block
+- [x] **Test:** remove after install → file is byte-identical to before
+- [x] **Test:** a user's own `PROMPT_COMMAND` survives install and remove. The
+      installer only ever appends and removes its own four lines; it never parses
+      or rewrites another line
+- [x] **Test, beyond the list above:** 45 tests in `src/shell/tests.rs` and the
+      hook-mode cases in `tests/runtime.rs`, driven through the public
+      `runtime::shell(mode, &Installer)` seam against temporary directories. These
+      cover quoting of a hook path containing a space or quote, an unknown shell,
+      an unreadable rc file, an install onto a file with no trailing newline, and
+      marker matching that must not fire on a lookalike line.
+
+**Deviation from ADR 0007: `--init --remove` together is refused.** ADR 0007 shows
+that spelling, but the three flags are implemented as modes and any two of them
+conflict, so `--init --remove` is a usage error (`tests/runtime.rs`,
+`a_hook_mode_reaches_the_conflict_error`). Treating two contradictory verbs as
+"remove wins" or "init wins" would silently do the opposite of what half the
+command line asks. The ADR is not edited; this is recorded here and in the
+CHANGELOG.
+
+**Not verified by a test, and reported honestly:** the integration test that would
+have driven the hook modes through `runtime::run` was removed after it was found to
+resolve the real `$SHELL` and the real home directory and install the hook into the
+developer's actual `~/.bashrc`. The hook-mode tests call `runtime::shell` directly
+with an injected `Installer` instead. The accidental install was removed
+byte-precisely by running `--remove --shell bash`; nothing else was touched. There
+is deliberately no test that runs the whole binary against the real home.
 
 ### 2.6 `--fix` and `--complete`
 
-- [ ] `--fix` picks the most recent entry with `exit != 0`, feeds the error
-      output to the model, prompts with a diff against the original
-- [ ] No failed entry in history → clear message, exit 0
-- [ ] `--complete` sends the partial command, returns only the continuation
-- [ ] **Test:** `--fix` with a fixture failed entry produces a command that
+- [x] `--fix` picks the most recent entry with `exit != 0`, feeds the error
+      output to the model, prompts with a diff against the original. Implemented
+      in `runtime::fix`: it reads through `History::read_last(200)`, assembles the
+      prompt with `context::prompt::build_prompt` (so ADR 0006 redaction and
+      escaping apply to the failure output like any other context), and passes the
+      model's answer through the same `gate` as any other generation. The
+      explanation is a `- failed` / `+ repaired` diff
+- [x] No failed entry in history → clear message, exit 0
+- [x] `--complete` sends the partial command and returns the completed command.
+      **Resolved:** the literal "returns only the continuation" wording was set
+      against the full-command output documented in [USAGE.md](USAGE.md),
+      `docs/gcode.1`, and `plan.md`, and against safety invariant 1 in
+      [TESTING.md](TESTING.md): emitting a bare suffix would mean the classified
+      string and the emitted string differ. The decision is to emit and classify
+      the full completed command, and to feed the partial to the model through
+      `context::prompt::build_prompt` so it is redacted before the prompt like any
+      other shell text (ADR 0006)
+- [x] **Test:** `--fix` with a fixture failed entry produces a command that
       differs from the original
-- [ ] **Test:** `--fix` with clean history is a no-op with a clear message
+      (`fix_picks_the_most_recent_failure_and_asks_for_a_repair`)
+- [x] **Test:** `--fix` with clean history is a no-op with a clear message
+      (`fix_with_clean_history_is_a_no_op_with_a_message`)
+- [x] **Test:** the failure output is redacted before it reaches the prompt
+      (`fix_redacts_a_secret_in_the_failure_output_before_the_prompt`)
+- [x] **Test:** a repaired command that classifies `CRITICAL` is refused
+      (`a_fix_that_returns_critical_is_refused`)
 
 ### Acceptance criteria
 
 - [ ] `gcode --init` then a failing command then `gcode --fix` produces a
-      corrected command
-- [ ] The user's shell prompt and `$?` are unaffected
-- [ ] Install is idempotent; remove restores the file exactly
-- [ ] History file is `0600` and rotates at 10 MB
-- [ ] Works in both bash and zsh, tested by sourcing real shells in CI
+      corrected command — the 2.6 code path is done and unit-tested against a
+      `FakeEngine`; the end-to-end run needs the real engine (Phase 1.5)
+- [x] The user's shell prompt and `$?` are unaffected — asserted against real
+      `bash` and `zsh`
+- [x] Install is idempotent; remove restores the file exactly
+- [x] History file is `0600` and rotates at 10 MB
+- [ ] Works in both bash and zsh, tested by sourcing real shells in CI — the
+      suites source real shells, but running them in CI is blocked on GitHub
+      Actions billing (see needs-human)
 
 ---
 

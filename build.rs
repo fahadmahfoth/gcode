@@ -208,6 +208,18 @@ fn check_entry(entry: &RegistryEntry, index: usize, release: bool, problems: &mu
              licence a model is under"
         ));
     }
+
+    // A release build must not ship a model whose checksum came from a web page.
+    // `verified = true` is the maintainer's statement that they downloaded this
+    // file, hashed it, and confirmed the digest. Debug builds and the test suite
+    // are unaffected, so the tool can be built and run before the download.
+    if release && entry.verified != Some(true) {
+        problems.push(format!(
+            "{label} is not `verified`. Download the file, run `shasum -a 256` on it, \
+             and set `verified = true` only after the digest matches. A checksum you \
+             did not produce yourself is a claim about a file you have not seen"
+        ));
+    }
 }
 
 /// Whether `text` is lowercase hexadecimal.
@@ -247,4 +259,8 @@ struct RegistryEntry {
     #[allow(dead_code)]
     recommended_threads: Option<u32>,
     license: Option<String>,
+    // Whether the maintainer has verified the checksum by hashing the file
+    // itself. Read in `check_entry`, which refuses a release build while it is
+    // not `true`.
+    verified: Option<bool>,
 }

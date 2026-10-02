@@ -55,9 +55,12 @@ How we will know it worked. The signal, and the number.
 | [0011](adr/0011-defer-the-plugin-system.md) | Defer the plugin system | Accepted | 2026-09-30 |
 | [0012](adr/0012-one-liner-install.md) | One-liner install as the primary path | Accepted | 2026-09-30 |
 | [0013](adr/0013-deny-windows-native.md) | Deny native Windows for v1.x | Accepted | 2026-09-30 |
-| [0014](adr/0014-default-model-kitty-bash-llm.md) | Default model: kitty-bash-llm | Accepted | 2026-09-30 |
+| [0014](adr/0014-default-model-kitty-bash-llm.md) | Default model: kitty-bash-llm | Superseded by 0018 | 2026-09-30 |
 | [0015](adr/0015-cargo-dist-over-distro-packaging.md) | cargo-dist as the release builder | Accepted | 2026-09-30 |
-| [0016](adr/0016-keyless-signing.md) | Keyless release signing | Accepted | 2026-09-30 |
+| [0016](adr/0016-keyless-signing.md) | Keyless release signing | Accepted (see 0019) | 2026-09-30 |
+| [0017](adr/0017-explicit-file-modes-over-umask.md) | Explicit file modes over umask | Accepted | 2026-10-01 |
+| [0018](adr/0018-bilingual-default-model.md) | Default model: qwen3-0.6b | Accepted | 2026-10-03 |
+| [0019](adr/0019-local-ci-not-github-actions.md) | Local CI, not GitHub Actions | Accepted | 2026-10-03 |
 
 ---
 

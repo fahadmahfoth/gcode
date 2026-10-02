@@ -69,7 +69,7 @@ credentials, tokens, private keys, or machine-specific paths.
 - **Version markers**: features not yet implemented are marked
   `⛔ planned (Phase N)` so readers can tell shipped from planned.
 - **Authorship footer**: none required. Documents may carry an attribution
-  note if the author wants one, but nothing in CI enforces it.
+  note if the author wants one, but `scripts/ci.sh` does not enforce it.
 
 ---
 

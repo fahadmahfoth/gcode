@@ -12,7 +12,11 @@ gcode \- natural language to shell command generator, locally and offline
 .I PARTIAL
 | \-\-explain
 .I COMMAND
-| \-\-init ]
+| \-\-init
+| \-\-check
+| \-\-remove ]
+.RB [ \-\-shell
+.IR SHELL ]
 .br
 .B gcode
 .RI [ OPTIONS ]
@@ -51,9 +55,17 @@ Explain an existing command: what it does, what it touches, and its risk level.
 Never executes and never generates.
 .TP
 .B \-\-init
-Install, check, or remove the shell history hook. See
-.B \-\-init
+Install the shell history hook. See
+.BR \-\-init ", " \-\-check ", " \-\-remove ", and " \-\-shell
 under OPTIONS.
+.TP
+.B \-\-check
+Report whether the shell hook is installed and which version, without modifying
+anything.
+.TP
+.B \-\-remove
+Remove the shell hook block and the gcode-owned hook file it sources, restoring
+the shell configuration byte for byte.
 .TP
 .B \-\-doctor
 Print a full health report: binary, model, shell hook, permissions, resources,
@@ -155,18 +167,35 @@ configuration value, 0.2 out of the box. Use 0.0 for deterministic output.
 .SS Shell integration
 .TP
 .B \-\-init
-Install the history hook for the detected shell. Idempotent. Modified shell
-configuration is delimited by
+Install the history hook for the shell detected from
+.BR $SHELL .
+Idempotent. Modified shell configuration is delimited by
 .B "# >>> gcode init >>>"
 and
-.BR "# <<< gcode init <<<" .
+.BR "# <<< gcode init <<<" ,
+and the block records the hook version so
+.B \-\-check
+can tell current from stale. The hook itself is copied to the gcode data
+directory and sourced from there.
 .TP
-.B \-\-init \-\-check
-Report whether the hook is installed and which version, without modifying
-anything.
+.B \-\-check
+Report whether the hook is installed and whether it is current, without
+modifying anything.
 .TP
-.B \-\-init \-\-remove
-Remove the hook, deleting exactly the delimited block and nothing else.
+.B \-\-remove
+Remove the hook, deleting exactly the delimited block and the separator line
+that installation added, so the file is restored byte for byte.
+.TP
+.BI \-\-shell " " \fISHELL\fR
+Install for
+.B bash
+or
+.BR zsh ,
+overriding detection from
+.BR $SHELL .
+Only valid together with
+.BR \-\-init ", " \-\-check ", or " \-\-remove ,
+which are mutually exclusive.
 .TP
 .BI \-\-generate\-completions " " \fISHELL\fR
 Write shell completions for
@@ -209,14 +238,11 @@ at the end of this section. They are documented because the interface is settled
 and the man page is meant to be written once. Passing an unimplemented option
 today is an error, not a silent no-op.
 .TP
-.BR \-\-edit ", " \-\-log\-level ", " \-\-log\-file ", " \-\-verbose ", " \-\-quiet ", " \-\-doctor ", " \-\-check ", " \-\-info ", " \-\-bench ", " \-\-strip\-components ", " \-\-generate\-completions
+.BR \-\-edit ", " \-\-log\-level ", " \-\-log\-file ", " \-\-verbose ", " \-\-quiet ", " \-\-doctor ", " \-\-info ", " \-\-bench ", " \-\-strip\-components ", " \-\-generate\-completions
 Diagnostics, editing, and completion generation.
 .TP
-.BR \-\-list\-models ", " \-\-download\-model ", " \-\-update\-model ", " \-\-use\-model ", " \-\-remove
+.BR \-\-list\-models ", " \-\-download\-model ", " \-\-update\-model ", " \-\-use\-model
 Model registry management.
-.TP
-.BR \-\-init ", " \-\-remove ", " \-\-uninstall
-Shell hook installation.
 .SH INTERACTIVE PROMPT
 When confirmation is required, the following keys are accepted:
 .TP

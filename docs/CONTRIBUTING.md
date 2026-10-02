@@ -36,13 +36,16 @@ gcode --download-model
 ## Branches and commits
 
 ```
-main              protected: needs a PR and green CI
-├── develop       integration branch
+main              canonical: PR + a green ./scripts/ci.sh
 ├── feat/<name>
 ├── fix/<name>
 ├── docs/<name>
 └── release/<version>
 ```
+
+There is no hosted CI ([ADR 0019](adr/0019-local-ci-not-github-actions.md)).
+Run `./scripts/ci.sh` and paste its output in the PR. A `develop` branch is not
+in use; branch from `main`.
 
 Commit format — [Conventional Commits](https://www.conventionalcommits.org/):
 
@@ -63,7 +66,7 @@ Commit format — [Conventional Commits](https://www.conventionalcommits.org/):
 | `docs` | Documentation only |
 | `refactor` | No behaviour change |
 | `build` | Dependencies, CI, packaging |
-| `ci` | Workflow changes |
+| `ci` | `scripts/ci.sh` and gate changes |
 | `chore` | Housekeeping |
 
 Scopes match the module map: `cli`, `config`, `context`, `inference`, `model`,
@@ -110,8 +113,9 @@ cargo insta test      # report
 cargo insta review    # accept, interactively
 ```
 
-Commit the `.snap` files. A snapshot diff in CI is a failure on purpose —
-prompt and output changes must be looked at by a human, not absorbed silently.
+Commit the `.snap` files. A snapshot diff in `scripts/ci.sh` is a failure on
+purpose — prompt and output changes must be looked at by a human, not absorbed
+silently.
 
 ---
 

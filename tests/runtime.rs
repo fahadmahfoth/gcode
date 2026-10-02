@@ -19,9 +19,10 @@ fn arc<T: InferenceEngine + 'static>(engine: &Arc<T>) -> Arc<dyn InferenceEngine
 }
 
 use gcode::cli::{self, Parsed};
+use gcode::context::history::{History, HistoryEntry};
 use gcode::error::Error;
 use gcode::inference::{EngineInfo, GenParams, InferenceEngine};
-use gcode::runtime::{run, Consenter, Decision, DenyAll};
+use gcode::runtime::{fix, run, Consenter, Decision, DenyAll};
 use gcode::safety::Risk;
 
 // ── the fake ────────────────────────────────────────────────────────────────
@@ -128,7 +129,36 @@ fn run_with_a_fake_engine_produces_the_expected_output() {
     assert_eq!(out.level, Risk::Safe);
     assert_eq!(out.mode, "generate");
     assert!(!out.executed, "nothing ran: no executor exists yet");
-    assert_eq!(engine.prompts(), vec!["list all files".to_owned()]);
+    let prompts = engine.prompts();
+    assert_eq!(prompts.len(), 1, "one generation, one prompt");
+    assert!(
+        prompts[0].contains("list all files"),
+        "the request reaches the model inside the assembled prompt: {}",
+        prompts[0]
+    );
+    assert!(
+        prompts[0].contains("<|system|>"),
+        "the request is wrapped by build_prompt, not sent raw: {}",
+        prompts[0]
+    );
+}
+
+#[test]
+fn a_secret_in_the_request_is_redacted_before_the_prompt() {
+    // ADR 0006 applies to the request too: it is the user's own words, but it can
+    // carry a pasted credential, so generate redacts it through build_prompt like
+    // every other generative mode.
+    let planted = "sk-QQQQ1111WWWW2222EEEE3333RRRR4444";
+    let request = format!("curl -H 'X-Key: {planted}' https://example.test");
+    let (parsed, engine) = generate(&["gcode", "-c", &request], "ls");
+    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("a safe command");
+    assert_eq!(out.command, "ls");
+    let prompt = engine.prompts().join("\n");
+    assert!(
+        !prompt.contains(planted),
+        "the request's secret reached the prompt: {prompt}"
+    );
+    assert!(prompt.contains("[REDACTED]"), "{prompt}");
 }
 
 #[test]
@@ -509,19 +539,180 @@ fn a_generating_mode_without_a_model_says_so() {
 }
 
 #[test]
-fn fix_and_interactive_name_themselves() {
-    for args in [vec!["gcode", "--fix"], vec!["gcode"]] {
-        match run(&parse(&args), None, &mut DenyAll, ALWAYS) {
-            Err(Error::ModeNotWired { mode }) => {
-                assert!(!mode.is_empty(), "unnamed mode for {args:?}");
-            }
-            Err(e) => panic!("{args:?}: wrong error {e}"),
-            Ok(out) => panic!("{args:?}: invented {:?}", out.command),
-        }
+fn interactive_names_itself() {
+    match run(&parse(&["gcode"]), None, &mut DenyAll, ALWAYS) {
+        Err(Error::ModeNotWired { mode }) => assert_eq!(mode, "interactive"),
+        Err(e) => panic!("wrong error {e}"),
+        Ok(out) => panic!("invented {:?}", out.command),
     }
-    // The mode name in the error is the one a user would type.
-    let err = run(&parse(&["gcode", "--fix"]), None, &mut DenyAll, ALWAYS).unwrap_err();
-    assert!(err.to_string().contains("fix"), "{err}");
+}
+
+// ── fix ─────────────────────────────────────────────────────────────────────
+
+/// A store at `scratch/<name>` holding `(cmd, exit, out)` entries, oldest first.
+fn seeded_history(scratch: &Scratch, name: &str, entries: &[(&str, i32, &str)]) -> History {
+    let history = History::new(scratch.0.join(name));
+    for (cmd, exit, out) in entries {
+        history
+            .append(&HistoryEntry {
+                ts: 0,
+                cmd: (*cmd).to_owned(),
+                exit: *exit,
+                cwd: "/tmp".to_owned(),
+                out: (*out).to_owned(),
+            })
+            .expect("append a fixture entry");
+    }
+    history
+}
+
+#[test]
+fn fix_with_clean_history_is_a_no_op_with_a_message() {
+    let scratch = Scratch::new("fix-clean");
+    let history = seeded_history(&scratch, "h.jsonl", &[("ls", 0, ""), ("pwd", 0, "")]);
+    let parsed = parse(&["gcode", "--fix"]);
+    let out = fix(None, &parsed, &mut DenyAll, ALWAYS, &history)
+        .expect("a clean history is not an error");
+    assert_eq!(out.mode, "fix");
+    assert!(out.command.is_empty(), "no command was invented");
+    assert!(!out.executed);
+    let text = out.explanation.expect("a message is always present");
+    assert!(text.contains("no failed command"), "{text}");
+}
+
+#[test]
+fn fix_with_no_history_file_reports_nothing_to_fix() {
+    // A fresh install has no file at all. That must read as "nothing to fix",
+    // not as an I/O error: `read_last` on a missing file is not a failure.
+    let scratch = Scratch::new("fix-missing");
+    let history = History::new(scratch.0.join("absent.jsonl"));
+    let out = fix(
+        None,
+        &parse(&["gcode", "--fix"]),
+        &mut DenyAll,
+        ALWAYS,
+        &history,
+    )
+    .expect("a missing store is not an error");
+    assert!(out.command.is_empty());
+}
+
+#[test]
+fn fix_picks_the_most_recent_failure_and_asks_for_a_repair() {
+    let scratch = Scratch::new("fix-latest");
+    let history = seeded_history(
+        &scratch,
+        "h.jsonl",
+        &[
+            ("first-bad --x", 1, "boom"),
+            ("ls", 0, ""),
+            ("second-bad --y", 2, "kaboom"),
+            ("pwd", 0, ""),
+        ],
+    );
+    let parsed = parse(&["gcode", "--fix", "--yes"]);
+    let engine = Arc::new(FakeEngine::new("fixed --z"));
+    let out = fix(Some(arc(&engine)), &parsed, &mut DenyAll, ALWAYS, &history)
+        .expect("a safe repair with --yes");
+    assert_eq!(out.command, "fixed --z");
+    assert_eq!(out.mode, "fix");
+
+    let prompt = engine.prompts().join("\n");
+    assert!(
+        prompt.contains("second-bad --y"),
+        "the newest failure is what the model sees: {prompt}"
+    );
+    assert!(
+        prompt.contains("kaboom"),
+        "the failure output is fed to the model: {prompt}"
+    );
+
+    let explanation = out.explanation.expect("a diff is shown");
+    assert!(
+        explanation.contains("- second-bad --y") && explanation.contains("+ fixed --z"),
+        "the diff must name the command that failed, not an older one: {explanation}"
+    );
+}
+
+#[test]
+fn fix_with_a_failure_and_no_model_reports_no_engine() {
+    let scratch = Scratch::new("fix-noengine");
+    let history = seeded_history(&scratch, "h.jsonl", &[("bad", 1, "")]);
+    match fix(
+        None,
+        &parse(&["gcode", "--fix"]),
+        &mut DenyAll,
+        ALWAYS,
+        &history,
+    ) {
+        Err(Error::NoEngine) => {}
+        other => panic!("expected NoEngine, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_fix_that_returns_critical_is_refused() {
+    // The repaired command goes through the same gate as any other generation.
+    // "Fix it" must not become a way to run something the classifier blocks.
+    let scratch = Scratch::new("fix-critical");
+    let history = seeded_history(&scratch, "h.jsonl", &[("clear", 1, "")]);
+    let engine = Arc::new(FakeEngine::new("rm -rf /"));
+    match fix(
+        Some(arc(&engine)),
+        &parse(&["gcode", "--fix", "--yes"]),
+        &mut DenyAll,
+        ALWAYS,
+        &history,
+    ) {
+        Err(Error::RiskBlocked { level, .. }) => assert_eq!(level, Risk::Critical),
+        other => panic!("expected RiskBlocked, got {other:?}"),
+    }
+}
+
+#[test]
+fn fix_redacts_a_secret_in_the_failure_output_before_the_prompt() {
+    // ADR 0006: redaction happens before prompt assembly. The failure output is
+    // untrusted free text, so it must go through the same single function the
+    // rest of the context does.
+    let scratch = Scratch::new("fix-secret");
+    let planted = "sk-AAAA0000BBBB1111CCCC2222DDDD3333";
+    let history = seeded_history(
+        &scratch,
+        "h.jsonl",
+        &[("login", 1, &format!("token={planted}"))],
+    );
+    let engine = Arc::new(FakeEngine::new("login --retry"));
+    let _ = fix(
+        Some(arc(&engine)),
+        &parse(&["gcode", "--fix", "--yes"]),
+        &mut DenyAll,
+        ALWAYS,
+        &history,
+    )
+    .expect("safe repair");
+    let prompt = engine.prompts().join("\n");
+    assert!(
+        !prompt.contains(planted),
+        "a secret from the failure output reached the prompt: {prompt}"
+    );
+    assert!(prompt.contains("[REDACTED]"), "{prompt}");
+}
+
+#[test]
+fn fix_respects_no_history() {
+    // With history suppressed there is nothing to read, so the honest answer is
+    // the same as a clean history rather than an attempt to fix a remembered one.
+    let scratch = Scratch::new("fix-nohistory");
+    let history = seeded_history(&scratch, "h.jsonl", &[("bad", 1, "")]);
+    let out = fix(
+        None,
+        &parse(&["gcode", "--fix", "--no-history"]),
+        &mut DenyAll,
+        ALWAYS,
+        &history,
+    )
+    .expect("nothing to fix, so no engine is needed");
+    assert!(out.command.is_empty());
 }
 
 // ── completeness ────────────────────────────────────────────────────────────
@@ -601,6 +792,38 @@ fn complete_asks_the_engine_to_finish_the_partial() {
     );
 }
 
+#[test]
+fn complete_emits_and_classifies_the_full_command() {
+    // The documented contract: `--complete` returns the whole completed command,
+    // and that same string is what is classified (invariant 1). It is not a bare
+    // suffix, which would be classified as something other than what is shown.
+    let (parsed, engine) = generate(&["gcode", "--complete", "rm -"], "rm -rf /");
+    match run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS) {
+        Err(Error::RiskBlocked { level, .. }) => assert_eq!(level, Risk::Critical),
+        other => panic!("the full completed command must be classified, got {other:?}"),
+    }
+}
+
+#[test]
+fn complete_redacts_a_secret_in_the_partial_before_the_prompt() {
+    // The partial is the user's own text and can hold a credential, so it goes
+    // through the same redact-before-assembly path as everything else (ADR 0006).
+    let planted = "sk-ZZZZ9999YYYY8888XXXX7777WWWW6666";
+    let partial = format!("curl -H 'X-Key: {planted}'");
+    let (parsed, engine) = generate(
+        &["gcode", "--complete", &partial, "--yes"],
+        "curl -H 'X-Key: sk-...' https://example.test",
+    );
+    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("a safe completion");
+    assert_eq!(out.mode, "complete");
+    let prompt = engine.prompts().join("\n");
+    assert!(
+        !prompt.contains(planted),
+        "the partial's secret reached the prompt: {prompt}"
+    );
+    assert!(prompt.contains("[REDACTED]"), "{prompt}");
+}
+
 /// CRITICAL is not an `Output` with `executed: false` — it is an error, because
 /// nothing downstream should be able to read a blocked command as merely pending.
 #[test]
@@ -638,4 +861,335 @@ fn config_risk_levels_convert_one_for_one() {
     ] {
         assert_eq!(Risk::from(config_level), expected);
     }
+}
+
+// ── shell hook modes ────────────────────────────────────────────────────────
+//
+// These go through `runtime::shell`, not `run`, so that nothing here reads the
+// real `$SHELL` or the real home directory. Every test writes to a temporary
+// directory that is removed when the test ends.
+
+use std::fs;
+use std::path::PathBuf;
+
+use gcode::cli::Mode;
+use gcode::runtime::shell;
+use gcode::shell::install::Installer;
+use gcode::shell::Kind;
+
+/// A temporary home for one hook-mode test.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(name: &str) -> Self {
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("gcode-hook-mode-{}-{n}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create scratch dir");
+        Self(path)
+    }
+
+    fn installer(&self, kind: Kind) -> Installer {
+        Installer::at(
+            kind,
+            self.0.join(kind.rc_file_name()),
+            self.0.join("shell").join(kind.hook_file_name()),
+        )
+    }
+
+    fn write_rc(&self, kind: Kind, contents: &str) {
+        fs::write(self.0.join(kind.rc_file_name()), contents).expect("write rc");
+    }
+
+    fn read_rc(&self, kind: Kind) -> String {
+        fs::read_to_string(self.0.join(kind.rc_file_name())).expect("read rc")
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+const USER_RC: &str = "alias ll='ls -la'\nPROMPT_COMMAND='history -a'\n";
+
+#[test]
+fn init_writes_the_block_and_says_it_did() {
+    let scratch = Scratch::new("init");
+    scratch.write_rc(Kind::Bash, USER_RC);
+
+    let out = shell(&Mode::Init, &scratch.installer(Kind::Bash)).expect("init succeeds");
+
+    assert_eq!(out.mode, "init");
+    assert!(out.command.is_empty(), "a hook install is not a command");
+    assert!(!out.executed, "installing a hook runs nothing");
+    let text = out.explanation.expect("a report");
+    assert!(text.contains("installed"), "{text}");
+}
+
+#[test]
+fn init_prints_the_exact_lines_it_added() {
+    // Roadmap 2.5: "prints the exact lines it added". A user who is about to have
+    // their rc file edited deserves to see the diff in the terminal.
+    let scratch = Scratch::new("lines");
+    scratch.write_rc(Kind::Bash, USER_RC);
+
+    let out = shell(&Mode::Init, &scratch.installer(Kind::Bash)).expect("init succeeds");
+    let text = out.explanation.expect("a report");
+
+    assert!(
+        text.contains("# >>> gcode init >>>"),
+        "no begin marker: {text}"
+    );
+    assert!(
+        text.contains("# <<< gcode init <<<"),
+        "no end marker: {text}"
+    );
+    assert!(text.contains("source '"), "no source line: {text}");
+}
+
+#[test]
+fn init_twice_reports_already_installed_and_changes_nothing() {
+    let scratch = Scratch::new("twice");
+    scratch.write_rc(Kind::Bash, USER_RC);
+    let installer = scratch.installer(Kind::Bash);
+
+    shell(&Mode::Init, &installer).expect("first init");
+    let after_first = scratch.read_rc(Kind::Bash);
+    let out = shell(&Mode::Init, &installer).expect("second init");
+
+    assert!(
+        out.explanation
+            .expect("report")
+            .contains("already installed"),
+        "second install did not say it was a no-op"
+    );
+    assert_eq!(scratch.read_rc(Kind::Bash), after_first, "the file changed");
+}
+
+#[test]
+fn remove_restores_the_users_rc_file_byte_for_byte() {
+    let scratch = Scratch::new("remove");
+    scratch.write_rc(Kind::Bash, USER_RC);
+    let installer = scratch.installer(Kind::Bash);
+
+    shell(&Mode::Init, &installer).expect("init");
+    let out = shell(&Mode::Remove, &installer).expect("remove");
+
+    assert_eq!(out.mode, "remove");
+    assert_eq!(scratch.read_rc(Kind::Bash), USER_RC);
+}
+
+#[test]
+fn remove_prints_the_lines_it_removed() {
+    let scratch = Scratch::new("removelines");
+    scratch.write_rc(Kind::Bash, USER_RC);
+    let installer = scratch.installer(Kind::Bash);
+
+    shell(&Mode::Init, &installer).expect("init");
+    let out = shell(&Mode::Remove, &installer).expect("remove");
+    let text = out.explanation.expect("report");
+
+    assert!(text.contains("removed:"), "{text}");
+    assert!(text.contains("# >>> gcode init >>>"), "{text}");
+}
+
+#[test]
+fn remove_when_nothing_is_installed_says_so_rather_than_failing() {
+    let scratch = Scratch::new("removenothing");
+    scratch.write_rc(Kind::Bash, USER_RC);
+
+    let out =
+        shell(&Mode::Remove, &scratch.installer(Kind::Bash)).expect("a no-op is not an error");
+    assert!(
+        out.explanation.expect("report").contains("not installed"),
+        "a silent success would hide that nothing happened"
+    );
+    assert_eq!(scratch.read_rc(Kind::Bash), USER_RC);
+}
+
+#[test]
+fn check_reports_missing_before_an_install() {
+    let scratch = Scratch::new("checkmissing");
+    scratch.write_rc(Kind::Bash, USER_RC);
+
+    let out = shell(&Mode::Check, &scratch.installer(Kind::Bash)).expect("check succeeds");
+    let text = out.explanation.expect("report");
+
+    assert!(text.contains("not installed"), "{text}");
+    assert!(
+        text.contains("--init"),
+        "does not say how to fix it: {text}"
+    );
+}
+
+#[test]
+fn check_reports_installed_with_the_current_version() {
+    let scratch = Scratch::new("checkinstalled");
+    scratch.write_rc(Kind::Bash, USER_RC);
+    let installer = scratch.installer(Kind::Bash);
+
+    shell(&Mode::Init, &installer).expect("init");
+    let out = shell(&Mode::Check, &installer).expect("check succeeds");
+    let text = out.explanation.expect("report");
+
+    assert!(text.contains("installed"), "{text}");
+    assert!(text.contains("current"), "{text}");
+    assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+}
+
+#[test]
+fn check_writes_nothing() {
+    // "Reports without changing anything", including not creating the rc file.
+    let scratch = Scratch::new("checkwrite");
+    let out = shell(&Mode::Check, &scratch.installer(Kind::Zsh)).expect("check succeeds");
+
+    assert!(
+        !scratch.0.join(".zshrc").exists(),
+        "check created an rc file"
+    );
+    assert!(out.explanation.expect("report").contains("not installed"));
+}
+
+#[test]
+fn the_three_modes_work_for_zsh_as_well_as_bash() {
+    let scratch = Scratch::new("zsh");
+    scratch.write_rc(Kind::Zsh, USER_RC);
+    let installer = scratch.installer(Kind::Zsh);
+
+    shell(&Mode::Init, &installer).expect("init");
+    assert!(
+        scratch.read_rc(Kind::Zsh).contains("gcode.zsh"),
+        "wrong hook"
+    );
+    assert!(!scratch.0.join(".bashrc").exists(), "touched bash");
+    shell(&Mode::Remove, &installer).expect("remove");
+    assert_eq!(scratch.read_rc(Kind::Zsh), USER_RC);
+}
+
+// There is deliberately no test here that runs a hook mode through `run`.
+// `run` resolves the shell from `$SHELL` and the paths from the real home
+// directory, so such a test would edit the developer's own `.bashrc` — and did,
+// once, before this note existed. `shell` exists precisely so the modes can be
+// driven against a temporary directory instead. The absence of consent in that
+// path is a property of the signature: `shell` takes no `Consenter`, so no
+// prompt can be reached from it.
+
+#[test]
+fn a_non_hook_mode_reaches_the_shell_helper_as_an_error() {
+    // The helper is public, so it can be called with the wrong mode. It must say
+    // so rather than editing a file on the strength of a mode it does not handle.
+    let scratch = Scratch::new("wrongmode");
+    let installer = scratch.installer(Kind::Bash);
+    assert!(matches!(
+        shell(
+            &Mode::Explain {
+                command: "ls".to_owned()
+            },
+            &installer
+        ),
+        Err(Error::ModeNotWired { .. })
+    ));
+}
+
+#[test]
+fn an_unreadable_rc_file_is_an_error_not_a_silent_install() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = Scratch::new("unreadable");
+        scratch.write_rc(Kind::Bash, USER_RC);
+        fs::set_permissions(scratch.0.join(".bashrc"), fs::Permissions::from_mode(0o000))
+            .expect("chmod");
+
+        // Root can read a 0000 file, so the assertion is only meaningful as a
+        // normal user. Skipping beats a false pass.
+        let result = shell(&Mode::Init, &scratch.installer(Kind::Bash));
+        let readable = fs::read_to_string(scratch.0.join(".bashrc")).is_ok();
+        fs::set_permissions(scratch.0.join(".bashrc"), fs::Permissions::from_mode(0o600))
+            .expect("chmod back");
+
+        if readable {
+            assert!(
+                matches!(result, Err(Error::ShellRcUnreadable { .. })),
+                "wrote to an unreadable rc file: {result:?}"
+            );
+            assert_eq!(
+                fs::read_to_string(scratch.0.join(".bashrc")).unwrap(),
+                USER_RC,
+                "the file was modified"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_malformed_block_is_refused_and_the_file_is_left_alone() {
+    let scratch = Scratch::new("malformed");
+    let broken = "alias x=1\n# >>> gcode init >>>\nsource '/tmp/gcode.bash'\n";
+    scratch.write_rc(Kind::Bash, broken);
+
+    assert!(matches!(
+        shell(&Mode::Init, &scratch.installer(Kind::Bash)),
+        Err(Error::ShellBlockMalformed)
+    ));
+    assert_eq!(scratch.read_rc(Kind::Bash), broken);
+}
+
+#[test]
+fn a_hook_mode_output_carries_no_risk_level_claim() {
+    // The mode reports on a file edit. Presenting "safe" next to that would
+    // imply the safety classifier had something to say about it, and it did not.
+    let scratch = Scratch::new("level");
+    scratch.write_rc(Kind::Bash, USER_RC);
+    let out = shell(&Mode::Init, &scratch.installer(Kind::Bash)).expect("init");
+
+    assert_eq!(out.level, Risk::Safe);
+    assert!(out.reasons.is_empty(), "reasons imply a classification");
+    assert!(out.segments.is_empty(), "segments imply a classification");
+}
+
+#[test]
+fn json_carries_the_explanation_and_is_null_when_there_is_none() {
+    // The key is always present. A consumer that has to test for its existence
+    // cannot tell an omitted field from an empty one.
+    let explained = run(
+        &parse(&["gcode", "--explain", "rm -rf /tmp/x", "--json"]),
+        None,
+        &mut DenyAll,
+        ALWAYS,
+    )
+    .expect("explain always succeeds");
+    assert!(
+        explained.to_json().contains("\"explanation\":\""),
+        "{}",
+        explained.to_json()
+    );
+
+    let (parsed, engine) = generate(&["gcode", "-c", "clean", "--json"], "ls -la");
+    let plain = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("SAFE runs");
+    assert!(
+        plain.to_json().contains("\"explanation\":null"),
+        "{}",
+        plain.to_json()
+    );
+}
+
+#[test]
+fn a_hook_mode_reports_itself_through_json() {
+    // Before this, `--json --init` printed an object with an empty command and
+    // said nothing about the file it had just edited.
+    let scratch = Scratch::new("json");
+    scratch.write_rc(Kind::Bash, USER_RC);
+
+    let out = shell(&Mode::Init, &scratch.installer(Kind::Bash)).expect("init");
+    let json = out.to_json();
+
+    assert!(json.contains("\"mode\":\"init\""), "{json}");
+    assert!(json.contains("gcode init"), "no report in {json}");
+    assert!(json.contains("\"executed\":false"), "{json}");
+    assert!(!json.contains('\n'), "not one line: {json}");
 }

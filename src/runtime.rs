@@ -24,8 +24,12 @@ use crate::cli::{Mode, Parsed};
 use crate::error::{Error, Result};
 use std::sync::Arc;
 
+use crate::context::history::History;
+use crate::context::prompt::{build_prompt, Context, HistoryEntry as PromptHistoryEntry};
 use crate::inference::{GenParams, InferenceEngine};
 use crate::safety::{self, Risk};
+use crate::shell::install::{changed_lines, Installer};
+use crate::utils::paths::Overrides;
 
 /// A [`Output`] re-export is defined in `lib.rs`; this module owns its
 /// construction.
@@ -95,8 +99,9 @@ pub fn run(
         Mode::Generate { request } => {
             let engine = engine.ok_or(Error::NoEngine)?;
             let params = GenParams::default();
+            let prompt = build_prompt(request, &Context::default());
             let command =
-                crate::inference::generate_command(&engine, request, &params).map_err(|e| {
+                crate::inference::generate_command(&engine, &prompt, &params).map_err(|e| {
                     Error::Inference {
                         message: e.to_string(),
                     }
@@ -106,18 +111,132 @@ pub fn run(
         Mode::Complete { partial } => {
             let engine = engine.ok_or(Error::NoEngine)?;
             let params = GenParams::default();
+            let prompt = build_prompt(&complete_request(partial), &Context::default());
             let generated =
-                crate::inference::generate_command(&engine, partial, &params).map_err(|e| {
+                crate::inference::generate_command(&engine, &prompt, &params).map_err(|e| {
                     Error::Inference {
                         message: e.to_string(),
                     }
                 })?;
             gate(generated, parsed, consenter, always_confirm)
         }
-        Mode::Fix | Mode::Interactive => Err(Error::ModeNotWired {
+        Mode::Init | Mode::Check | Mode::Remove => shell_mode(parsed),
+        Mode::Fix => {
+            let history = History::with_overrides(&Overrides::from_env()?)?;
+            fix(engine, parsed, consenter, always_confirm, &history)
+        }
+        Mode::Interactive => Err(Error::ModeNotWired {
             mode: parsed.mode.to_string(),
         }),
     }
+}
+
+/// How many recent entries are searched for a failure.
+///
+/// Wider than the prompt's own history window on purpose: the failed command may
+/// be older than the last few commands, and reporting "no failed command" while
+/// one sits just outside the window would be a lie. Reading backwards is cheap.
+const FIX_SEARCH_DEPTH: usize = 200;
+
+/// The instruction handed to the model when repairing.
+const FIX_REQUEST: &str = "The most recent command in the history failed. Give one corrected \
+     shell command that fixes it. Reply with the command only.";
+
+/// Implements `--fix`.
+///
+/// Finds the most recent entry with a non-zero exit, assembles the prompt through
+/// [`build_prompt`] so the failure is redacted and escaped exactly like every
+/// other piece of context (ADR 0006), and feeds the model's answer through
+/// [`gate`] like any other generated command. A clean history is not an error:
+/// there is simply nothing to repair, so this returns an [`Output`] carrying that
+/// message and no command.
+///
+/// # Errors
+///
+/// [`Error::NoEngine`] when a failure exists and no model is loaded,
+/// [`Error::History`] when the store cannot be read, and the classification,
+/// block, and consent errors [`gate`] can return.
+pub fn fix(
+    engine: Option<Arc<dyn InferenceEngine>>,
+    parsed: &Parsed,
+    consenter: &mut dyn Consenter,
+    always_confirm: Risk,
+    history: &History,
+) -> Result<Output> {
+    if parsed.no_history {
+        return Ok(no_failure());
+    }
+    let entries = history.read_last(FIX_SEARCH_DEPTH)?;
+    let Some(failed_at) = entries.iter().rposition(|entry| entry.exit != 0) else {
+        return Ok(no_failure());
+    };
+    let engine = engine.ok_or(Error::NoEngine)?;
+
+    // Only entries up to and including the failure. `build_prompt` keeps the
+    // newest `MAX_HISTORY_ENTRIES`, so ending the slice at the failure guarantees
+    // the failed command is shown even when it is older than that window.
+    let context = Context {
+        history: entries[..=failed_at]
+            .iter()
+            .map(|entry| {
+                let mut prompt_entry = PromptHistoryEntry::new(&entry.cmd, entry.exit);
+                if !entry.out.is_empty() {
+                    prompt_entry.out = Some(entry.out.clone());
+                }
+                prompt_entry
+            })
+            .collect(),
+        ..Context::default()
+    };
+    let prompt = build_prompt(FIX_REQUEST, &context);
+    let params = GenParams::default();
+    let generated = crate::inference::generate_command(&engine, &prompt, &params).map_err(|e| {
+        Error::Inference {
+            message: e.to_string(),
+        }
+    })?;
+
+    let original = entries[failed_at].cmd.clone();
+    let mut out = gate(generated, parsed, consenter, always_confirm)?;
+    out.explanation = Some(fix_explanation(&original, &out.command));
+    Ok(out)
+}
+
+/// The `Output` for a `--fix` with nothing to repair.
+fn no_failure() -> Output {
+    Output {
+        command: String::new(),
+        level: Risk::Safe,
+        mode: Mode::Fix.to_string(),
+        reasons: Vec::new(),
+        segments: Vec::new(),
+        explanation: Some("no failed command in history; nothing to fix".to_owned()),
+        executed: false,
+    }
+}
+
+/// How the repaired command is shown against the one that failed.
+fn fix_explanation(original: &str, corrected: &str) -> String {
+    if original == corrected {
+        format!("the model returned the original command unchanged:\n  {original}")
+    } else {
+        format!("fix:\n  - {original}\n  + {corrected}")
+    }
+}
+
+/// The instruction wrapped around a `--complete` partial.
+///
+/// The partial is the user's own text, so it goes through [`build_prompt`] and is
+/// redacted like every other string from the shell (ADR 0006). The model returns
+/// the completed command; the emitted string is that whole command, and it is the
+/// whole command that is classified and gated, so invariant 1 holds.
+const COMPLETE_REQUEST: &str =
+    "Complete this partial shell command, keeping the text already typed. \
+     Reply with the completed command only.\n";
+
+/// The request body for `--complete`.
+fn complete_request(partial: &str) -> String {
+    format!("{COMPLETE_REQUEST}{partial}")
 }
 
 /// Converts the config layer's risk level into the classifier's.
@@ -239,6 +358,138 @@ fn gate(
     // the executor was already wired. When 2.3 needs the engine, it will take it,
     // and the change will be visible in the diff.
     Ok(output(&command, &verdict, &parsed.mode.to_string(), false))
+}
+
+/// Runs one of the three shell-integration modes.
+///
+/// These are not command modes, so the [`Output`] they produce has no command and
+/// no risk level: the report lives in `explanation` and `executed` is `false`,
+/// because installing a hook runs nothing. They still go through `run` rather
+/// than being special-cased in `main`, so that there is exactly one place where
+/// a mode is dispatched.
+///
+/// # Errors
+///
+/// Returns [`Error::HomeDirUnavailable`] when no home directory is known,
+/// [`Error::UnsupportedShell`] when `$SHELL` is neither bash nor zsh, the four
+/// `Shell*` I/O variants when a file cannot be read or written, and
+/// [`Error::ShellBlockMalformed`] when an rc file has an unterminated block.
+fn shell_mode(parsed: &Parsed) -> Result<Output> {
+    let kind = match parsed.shell {
+        Some(kind) => kind,
+        None => shell_kind_from_env()?,
+    };
+    let installer = Installer::resolve(kind, &Overrides::from_env()?)?;
+    shell(&parsed.mode, &installer)
+}
+
+/// Runs one of the three hook modes against an explicit [`Installer`].
+///
+/// The seam that makes these modes testable. [`shell_mode`] resolves the shell
+/// from the real `$SHELL` and the paths from the real home directory, which a test
+/// must never touch; this takes both, so every behaviour worth asserting — the
+/// report text, the exact lines printed, the failure modes — can be checked
+/// against a temporary directory.
+///
+/// # Errors
+///
+/// Returns the `Shell*` I/O variants, [`Error::ShellBlockMalformed`] for an
+/// unterminated block, and [`Error::ModeNotWired`] for a mode that is not one of
+/// the three.
+pub fn shell(mode: &Mode, installer: &Installer) -> Result<Output> {
+    let explanation = match mode {
+        Mode::Init => {
+            let plan = installer.init()?;
+            report(mode, &plan, installer)
+        }
+        Mode::Check => match installer.check()? {
+            crate::shell::Status::Missing => format!(
+                "not installed\n\nrun `gcode --init` to install it into {}",
+                installer.rc_path.display()
+            ),
+            crate::shell::Status::Installed { version, current } => {
+                let state = if current { "current" } else { "out of date" };
+                format!(
+                    "installed ({state}, version {version})\n{}",
+                    installer.rc_path.display()
+                )
+            }
+        },
+        Mode::Remove => {
+            let plan = installer.remove()?;
+            report(mode, &plan, installer)
+        }
+        _ => {
+            return Err(Error::ModeNotWired {
+                mode: mode.to_string(),
+            })
+        }
+    };
+
+    Ok(Output {
+        command: String::new(),
+        level: Risk::Safe,
+        mode: mode.to_string(),
+        reasons: Vec::new(),
+        segments: Vec::new(),
+        explanation: Some(explanation),
+        executed: false,
+    })
+}
+
+/// Reads `$SHELL` and resolves it to a supported shell.
+///
+/// # Errors
+///
+/// Returns [`Error::UnsupportedShell`] when `$SHELL` is unset or names a shell
+/// gcode has no hook for.
+fn shell_kind_from_env() -> Result<crate::shell::Kind> {
+    let value = std::env::var_os("SHELL").ok_or_else(|| Error::UnsupportedShell {
+        shell: String::from("unset"),
+    })?;
+    crate::shell::Kind::from_shell_var(&value)
+}
+
+/// Renders an install or remove report.
+///
+/// The exact lines are included whenever anything was written, because a user who
+/// is about to have their rc file edited deserves to see the diff in the terminal
+/// rather than having to open the file to find out what changed.
+fn report(mode: &Mode, plan: &crate::shell::Plan, installer: &Installer) -> String {
+    let outcome = plan.outcome;
+    let verb = match outcome {
+        crate::shell::Outcome::Added => "installed",
+        crate::shell::Outcome::Updated => "updated",
+        crate::shell::Outcome::Removed => "removed",
+        crate::shell::Outcome::Unchanged => "already installed",
+        crate::shell::Outcome::NotInstalled => "not installed",
+    };
+    let what = if mode.is_shell_hook() && matches!(mode, Mode::Remove) {
+        "from"
+    } else {
+        "in"
+    };
+    let mut text = format!(
+        "{verb} the shell hook {what} {}\nhook: {}",
+        installer.rc_path.display(),
+        installer.hook_path.display()
+    );
+    let lines = changed_lines(plan);
+    if !lines.is_empty() {
+        let heading = if matches!(mode, Mode::Remove) {
+            "removed:"
+        } else {
+            "added:"
+        };
+        text.push('\n');
+        text.push_str(heading);
+        text.push('\n');
+        for line in lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    text
 }
 
 /// Builds an [`Output`] from a command and its verdict.

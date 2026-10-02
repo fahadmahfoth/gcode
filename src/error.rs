@@ -148,7 +148,7 @@ pub enum Error {
     /// answer before the inference pipeline lands is "I have no model", not a
     /// plausible command invented to look busy.
     #[error(
-        "the generate and complete modes need a model, and none is loaded. \
+        "the generate, complete, and fix modes need a model, and none is loaded. \
          Pass --model, or set `model` in {}, or run with --explain, which needs none",
         crate::utils::paths::config_file_display()
     )]
@@ -173,4 +173,69 @@ pub enum Error {
         /// The mode name, as a user would type it.
         mode: String,
     },
+
+    /// `$SHELL` is not a shell gcode has a hook for.
+    ///
+    /// Refused rather than guessed at. Writing a bash hook into a fish config
+    /// would leave the user with a shell that silently records nothing and a
+    /// success message.
+    #[error(
+        "cannot install the shell hook for {shell}: gcode has hooks for bash and zsh only. \
+         Re-run with --shell bash or --shell zsh to choose one"
+    )]
+    UnsupportedShell {
+        /// The basename of `$SHELL`, as found.
+        shell: String,
+    },
+
+    /// An rc file exists but could not be read.
+    ///
+    /// Distinct from "the file does not exist", which is not an error. This one
+    /// matters because truncating an unreadable rc file would delete a user's
+    /// shell configuration and then report success.
+    #[error(
+        "cannot read the shell configuration at {}: {source}. gcode did not change it. \
+         Fix the permissions, or run with --shell and an explicit path",
+        path.display()
+    )]
+    ShellRcUnreadable {
+        /// The rc file that could not be read.
+        path: std::path::PathBuf,
+        /// What the operating system reported.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The rc file could not be written.
+    #[error("cannot write the shell configuration at {}: {source}", path.display())]
+    ShellRcWrite {
+        /// The rc file that could not be written.
+        path: std::path::PathBuf,
+        /// What the operating system reported.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// gcode's copy of the hook could not be written.
+    #[error("cannot write the shell hook to {}: {source}", path.display())]
+    ShellHookWrite {
+        /// Where the hook file should have gone.
+        path: std::path::PathBuf,
+        /// What the operating system reported.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// An rc file has a begin marker with no end marker.
+    ///
+    /// Raised rather than repaired. Appending a second block would leave the file
+    /// with two, and guessing where the first one was meant to stop would risk
+    /// deleting the user's own lines on the next remove.
+    #[error(
+        "the gcode block in the shell configuration is not terminated: {} has no {} after it. \
+         gcode did not change the file; delete the block by hand, or remove the stray marker line",
+        crate::shell::BEGIN_MARKER,
+        crate::shell::END_MARKER
+    )]
+    ShellBlockMalformed,
 }

@@ -1,7 +1,10 @@
 # Release Process
 
-Releases are automated. Your job is to tag, to hold the signing key, and to
-review the notes. Everything else runs in CI.
+Releases are built and verified locally. Your job is to tag, to hold the signing
+key, and to review the notes. The project does not use GitHub Actions
+([ADR 0019](adr/0019-local-ci-not-github-actions.md)); the build, signing, and
+publication steps below are run by hand until a replacement release pipeline is
+decided.
 
 ---
 
@@ -30,14 +33,19 @@ Semantic versioning, with an honest reading of the pre-1.0 part.
 
 ## The signing key 🔒
 
-**The private signing key never enters this repository, and never enters CI.**
+**The private signing key never enters this repository, and never enters a
+committed file.**
 
 - It lives in your password manager and, at most, in an offline encrypted backup.
-- CI signs with [Sigstore keyless OIDC](https://github.com/sigstore/fulcio) —
-  GitHub's identity, no long-lived secret required.
-- The APT repository uses a GPG key that you hold personally. CI reads it from
-  an encrypted secret 🔒. If that secret is ever exposed, rotate it immediately;
-  a leaked package-signing key is a full compromise of the distribution channel.
+- **The signing mechanism is currently undecided.** It used to be Sigstore
+  keyless OIDC — GitHub's identity, no long-lived secret — but that depended on
+  a hosted GitHub Actions runner, which this project no longer uses
+  ([ADR 0019](adr/0019-local-ci-not-github-actions.md)). A replacement ADR must
+  pick between a local Sigstore flow, a hardware key, or a self-hosted runner
+  before any release is signed.
+- The APT repository uses a GPG key that you hold personally. If that key is ever
+  exposed, rotate it immediately; a leaked package-signing key is a full
+  compromise of the distribution channel.
 - Losing the key means losing the ability to update the APT repository
   gracefully. You are the recovery path. Back it up now, not later.
 
@@ -52,8 +60,8 @@ Everything below is a hard gate. If any item is unchecked, do not tag.
 - [ ] `cargo test` green, coverage ≥ 85 %
 - [ ] `cargo fmt --check` and `cargo clippy -D warnings` clean
 - [ ] `cargo audit` reports zero unpatched advisories
-- [ ] The full OS matrix is green
-- [ ] `main` is merged and up to date with `develop`
+- [ ] `./scripts/ci.sh` exits zero on the build host
+- [ ] `main` is the branch being released, and is up to date
 
 ### Safety
 
@@ -109,7 +117,7 @@ commit log.
 version = "1.0.0"
 ```
 
-`CHANGELOG.md`, `Cargo.toml`, and the tag must agree. CI checks this.
+`CHANGELOG.md`, `Cargo.toml`, and the tag must agree. The local gate checks this.
 
 ### 4. Tag and push
 
@@ -118,15 +126,17 @@ git tag -a v1.0.0 -m "gcode 1.0.0"
 git push origin main --tags
 ```
 
-Pushing the tag triggers `.github/workflows/release.yml`, which:
+Pushing the tag no longer triggers automation. Until a release pipeline is
+decided ([ADR 0019](adr/0019-local-ci-not-github-actions.md)), the steps that a
+workflow used to perform are run locally:
 
-1. Builds the full target matrix with `--locked`
-2. Runs `cargo dist` for archives and installers
+1. Builds the target you are releasing with `--locked`
+2. Archives and installers are assembled by hand
 3. Generates the man page and completions
-4. Signs with Sigstore keyless
+4. Signs with the chosen mechanism (see *The signing key*, still undecided)
 5. Emits `checksums.txt` and an SBOM
-6. Attaches SLSA provenance
-7. Creates a GitHub Release with notes drawn from `CHANGELOG.md`
+6. Attaches provenance if the signing mechanism provides it
+7. Creates a release on the hosting service with notes drawn from `CHANGELOG.md`
 8. Builds and publishes the Docker image
 9. Opens the packaging PRs (Homebrew, AUR)
 
@@ -143,8 +153,8 @@ container or VM, not your laptop — your laptop has state that hides bugs.
 
 | Channel | Automated? | Notes |
 |---|---|---|
-| GitHub Releases | Yes | Automatic on tag |
-| Docker Hub / GHCR | Yes | Automatic on tag |
+| GitHub Releases | No | Created by hand on tag; no runner (ADR 0019) |
+| Docker Hub / GHCR | No | Built and pushed by hand |
 | Homebrew | PR opened | You merge it |
 | AUR | PR opened | You merge it |
 | APT repo | Manual 🔒 | Needs your GPG key |
@@ -234,5 +244,5 @@ the 1.x line.
 - [ROADMAP.md](ROADMAP.md) — the definition of done for 1.0.0
 - [CHANGELOG.md](../CHANGELOG.md) — the release history
 - [SECURITY.md](../SECURITY.md) — disclosure and the rotation procedure
-- [../.github/workflows/release.yml](../.github/workflows/release.yml) — the
-  automation this document describes
+- [ADR 0019](adr/0019-local-ci-not-github-actions.md) — why there is no
+  release workflow to link to

@@ -272,6 +272,47 @@ pub fn history_dir_with(overrides: &Overrides) -> Result<PathBuf> {
     Ok(home(overrides)?.join(format!(".{APP}")))
 }
 
+/// The rc file gcode would install a shell hook into.
+///
+/// `kind` is passed as a filename rather than an enum so this module stays
+/// free of a dependency on [`crate::shell`], which depends on this module for
+/// the same reason. The caller has already validated that the name is one of
+/// the two gcode supports.
+///
+/// # Errors
+///
+/// Returns [`Error::HomeDirUnavailable`] when the home directory cannot be
+/// determined.
+pub fn shell_rc_file_with(overrides: &Overrides, kind: crate::shell::Kind) -> Result<PathBuf> {
+    Ok(home(overrides)?.join(kind.rc_file_name()))
+}
+
+/// The directory holding gcode's copies of the shell hooks.
+///
+/// Inside [`history_dir`] rather than the data directory: the hooks are
+/// configuration for the current user, not model-adjacent payload, and
+/// keeping them together means one place to look when a user asks why their
+/// prompt is slow.
+///
+/// # Errors
+///
+/// Returns [`Error::HomeDirUnavailable`] when the home directory cannot be
+/// determined.
+pub fn shell_hook_dir() -> Result<PathBuf> {
+    shell_hook_dir_with(&Overrides::from_env()?)
+}
+
+/// The directory holding gcode's copies of the shell hooks, resolved against
+/// `overrides`.
+///
+/// # Errors
+///
+/// Returns [`Error::HomeDirUnavailable`] when the home directory cannot be
+/// determined.
+pub fn shell_hook_dir_with(overrides: &Overrides) -> Result<PathBuf> {
+    Ok(home(overrides)?.join(format!(".{APP}")).join("shell"))
+}
+
 /// The full path to the append-only history file.
 ///
 /// # Errors
@@ -454,6 +495,42 @@ mod tests {
             history_file_with(&o).unwrap(),
             PathBuf::from("/tmp/h.jsonl")
         );
+    }
+
+    #[test]
+    fn the_shell_rc_file_sits_in_the_home_directory() {
+        let bash = shell_rc_file_with(&linux_like(), crate::shell::Kind::Bash).unwrap();
+        assert_eq!(bash, PathBuf::from("/home/user/.bashrc"));
+        let zsh = shell_rc_file_with(&macos_like(), crate::shell::Kind::Zsh).unwrap();
+        assert_eq!(zsh, PathBuf::from("/Users/user/.zshrc"));
+    }
+
+    #[test]
+    fn the_hook_directory_lives_under_the_gcode_directory() {
+        // Documented at ~/.gcode/shell on every platform, like the history file.
+        // A hook that is not next to the thing it configures is harder to find.
+        let linux = shell_hook_dir_with(&linux_like()).unwrap();
+        assert_eq!(linux, PathBuf::from("/home/user/.gcode/shell"));
+        // Same relative layout on both, so the documented path is one string.
+        assert_eq!(
+            linux,
+            shell_hook_dir_with(&macos_like())
+                .unwrap()
+                .strip_prefix("/Users/user")
+                .map(|rest| PathBuf::from("/home/user").join(rest))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_missing_home_directory_is_an_error_for_the_shell_paths_too() {
+        let o = Overrides::default();
+        for result in [
+            shell_rc_file_with(&o, crate::shell::Kind::Bash),
+            shell_hook_dir_with(&o),
+        ] {
+            assert!(matches!(result, Err(Error::HomeDirUnavailable)));
+        }
     }
 
     #[test]

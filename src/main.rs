@@ -104,6 +104,15 @@ fn main() {
                 println!("{}", output.to_json());
                 return;
             }
+            if output.command.is_empty() {
+                // A mode that produces no command — the shell-hook modes. Printing
+                // an empty line and then "safe" would claim a risk level for a
+                // file edit, which is not what those modes do.
+                if let Some(explanation) = &output.explanation {
+                    println!("{explanation}");
+                }
+                return;
+            }
             // The command first, on its own line, so it can be selected and
             // copied without the risk line.
             println!("{}", output.command);

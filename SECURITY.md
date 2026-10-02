@@ -122,17 +122,16 @@ network access once. The tool itself does not.
 
 | Measure | Where |
 |---|---|
-| `cargo audit` on every push | `.github/workflows/ci.yml` |
-| `cargo deny` licence and advisory policy | `.github/workflows/ci.yml` |
-| `cargo vet` audited dependency list | `.github/workflows/ci.yml` |
-| Secret scanning | `.github/workflows/ci.yml`, gitleaks |
-| Dependency review on every PR | `.github/workflows/ci.yml` |
-| Keyless release signing | `.github/workflows/release.yml` |
-| SLSA provenance attestation | `.github/workflows/release.yml` |
-| Classifier fuzzing | `cargo fuzz run fuzz_classify`, nightly |
-| 100 % coverage gate on the classifier | CI, [docs/TESTING.md](docs/TESTING.md) |
+| `cargo audit` on demand | `scripts/ci.sh` |
+| `cargo deny` licence and advisory policy | `scripts/ci.sh` |
+| `cargo vet` audited dependency list | ⛔ not set up yet |
+| Secret scanning (grep backstop) | `scripts/ci.sh` — ⚠ not gitleaks over full history |
+| Keyless release signing | ⛔ open: depended on GitHub Actions OIDC ([ADR 0019](docs/adr/0019-local-ci-not-github-actions.md)) |
+| SLSA provenance attestation | ⛔ open: same reason |
+| Classifier fuzzing | `cargo fuzz run fuzz_classify`, run by hand |
+| 100 % coverage gate on the classifier | local, [docs/TESTING.md](docs/TESTING.md) |
 | History file mode `0600` | `context::history`, tested |
-| Network only in the model downloader | CI check, [ADR 0001](docs/adr/0001-local-first-offline-inference.md) |
+| Network only in the model downloader | `scripts/ci.sh`, [ADR 0001](docs/adr/0001-local-first-offline-inference.md) |
 
 ---
 
@@ -152,7 +151,7 @@ This repository is public. Therefore:
 5. **`.env` is gitignored. `.env.example` contains only variable names**, with
    empty or placeholder values.
 6. **The OpenCode agents in `.opencode/` are configured to refuse** to write
-   credential-shaped values, and CI scans every commit for them.
+   credential-shaped values, and `scripts/ci.sh` scans the tracked tree for them.
 
 If a secret is ever committed:
 

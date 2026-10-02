@@ -16,6 +16,131 @@ This rule is what keeps the documentation honest — see
 
 ### Added
 
+- `shell/gcode.bash` (Phase 2.3): the bash history hook. One JSONL line per prompt,
+  with the command, its exit status, the working directory, and the timestamp —
+  the input `--fix` needs. Tested by sourcing it in a real `/bin/bash` 3.2, because
+  everything it can get wrong is about bash itself and a mock of bash would pass
+  against a hook that is completely broken. 27 tests in `tests/hook_bash.rs`.
+  - **`$?` is preserved.** `local status=$?` on a single statement, because `local`
+    is itself a command: writing `local status; status=$?` reads the status of
+    `local`, which is always 0, and every entry in the store would claim every
+    command succeeded. The status is returned before the hook returns, so the
+    user's own `PROMPT_COMMAND` entries and their prompt still see it.
+  - **The hook is prepended, not appended.** Appending is the intuitive choice and it
+    is wrong: `PROMPT_COMMAND` entries run in sequence and each sees the previous
+    one's status, so an appended capture records whatever the user's own hook last
+    returned. With a `PROMPT_COMMAND` returning 7, every command in the store read
+    `"exit":7` — a worse failure than recording nothing, because `--fix` would learn
+    that every command fails for one unrelated reason.
+  - **Output is deliberately not captured, and this is a deviation.** The roadmap
+    asked for the last 2 KB of output. Capturing it means redirecting the command's
+    stdout, which makes `[ -t 1 ]` false for everything the user runs: `ls` drops
+    its colour, `less` stops paging, an editor refuses to start. That was measured.
+    `out` is written empty, and `--fix` will work from the command and its exit
+    status. Revising this needs a PTY-based capture or a new ADR.
+  - No `jq`, no `date`, no `sed` on the hot path. `printf '%(%s)T'` needs bash 4.2
+    and macOS still ships 3.2, so the timestamp comes from the shell clock and is
+    refreshed at most once per second from a cached value. **Measured 2.2 ms per
+    prompt** against the 5 ms budget (`date +%s` alone costs 3.2 ms).
+  - Idempotent, chained rather than replacing, per-prompt `GCODE_NO_HISTORY`, `0600`
+    file inside a `0700` directory, and it never fails the shell: every function that
+    can fail is guarded, every expansion is `set -u`-safe, and an unwritable history
+    location produces silence rather than a diagnostic on every prompt.
+  - **Its own `source` line is skipped.** `--init` puts `source '<...>/gcode.bash'`
+    in the user's rc file, and that is a real prompt like any other; before this it
+    was recorded as the first command of every new shell, and `--fix` would have
+    been offered the hook itself as the thing that failed. Only a `source` of a
+    gcode hook file is skipped — a user's `source` of anything else still records.
+  - **Every control character is replaced, not just three.** The escaper handled
+    newline, carriage return, and tab, but RFC 8259 forbids all of U+0000..U+001F
+    inside a JSON string, so a command containing a backspace or an arbitrary
+    control byte wrote a line the reader rejected — losing the whole entry. It now
+    uses the shell's `[[:cntrl:]]` class, verified to leave UTF-8 intact in bash
+    3.2 and zsh.
+
+- `shell/gcode.zsh` (Phase 2.4): the zsh hook, appending to `precmd_functions`.
+  Measured 1.3 ms per prompt. Tested by sourcing it in a real zsh — 24 tests in
+  `tests/hook_zsh.rs`, each clearing `HISTFILE` and passing `--no-rcs` so no test
+  reads the developer's `.zshrc` or their real history.
+  - **The exit code is captured into `ret`, not `status`.** `status` is a read-only
+    special variable in zsh aliased to `?`, so `local status=$?` fails on the very
+    first line of the hook: it errors on every prompt and records nothing. This was
+    not hypothetical — it is what the first version of this file did, and the file's
+    header now says so. A test fails if that diagnostic ever returns.
+  - Appending to `precmd_functions` is safe here, unlike bash's `PROMPT_COMMAND`:
+    zsh restores `$?` for each `precmd` hook, so a user's `precmd` returning non-zero
+    cannot corrupt the recorded status. Asserted by a test rather than assumed.
+  - The same two fixes as bash, because the two files are separate and will drift:
+    the hook's own `source` line is skipped, and every control character is replaced
+    via `[[:cntrl:]]` rather than only newline, carriage return, and tab. A test
+    runs the same inputs through both hooks' escapers and fails if they disagree.
+
+- `gcode --init`, `--check`, `--remove`, and `--shell <bash|zsh>` (Phase 2.5): the
+  installer that wires a hook into the user's rc file. The shell is detected from
+  `$SHELL`, overridable with `--shell`; an unrecognised shell is refused by name
+  rather than guessed, and `--shell fish` is rejected at the argument layer. The
+  block is four lines — begin marker, a version line, a `source` of the
+  gcode-owned hook copy, end marker — so `--check` can report installed-and-current
+  versus installed-and-stale without touching the file.
+  - **The `source` line points at `~/.gcode/shell/`, not at the binary.** The hook
+    text is embedded at compile time and copied there on install, so moving or
+    repackaging the binary cannot break a user's prompt.
+  - **Removal is byte-precise.** Install appends one separator newline; remove
+    deletes the four lines plus exactly that one newline. Round trips that start
+    from an empty file, a lone newline, a file with no trailing newline, and a file
+    with trailing blank lines all restore byte-for-byte. An empty file comes back
+    empty rather than as one stray newline.
+  - **It never rewrites a line it did not add.** A user's own `PROMPT_COMMAND` or
+    anything else in the rc file survives install and remove untouched, because the
+    installer only ever appends and removes its own block.
+  - **A corrupt block is refused, not repaired.** A begin marker with no matching
+    end marker is `Error::ShellBlockMalformed`; marker matching is line-exact so a
+    hand-edited lookalike cannot be mistaken for the block. An rc file that exists
+    but cannot be read is `Error::ShellRcUnreadable` and nothing is written.
+  - **Deviation from ADR 0007:** the ADR shows `--init --remove`, but the three
+    flags are modes and any two conflict, so that spelling is a usage error.
+    Choosing a winner between two contradictory verbs would silently do the
+    opposite of half the command line. Recorded here and in ROADMAP 2.5.
+  - 45 tests in `src/shell/tests.rs` plus the hook-mode cases in
+    `tests/runtime.rs`, run through `runtime::shell(mode, &Installer)` against
+    temporary directories. There is deliberately no test that runs the whole binary
+    against the real home: one had been written, and it was removed after it
+    resolved the real `$SHELL` and installed the hook into the developer's actual
+    `~/.bashrc`. The accidental install was undone byte-precisely with
+     `--remove --shell bash`; nothing else in that file was changed.
+
+- `gcode --fix` (Phase 2.6): repair the most recent failed command. It reads up
+  to 200 entries from the store, takes the newest with a non-zero exit, and asks
+  the model for one corrected command. The prompt is assembled through
+  `context::prompt::build_prompt`, so the failed command and its output are
+  redacted and escaped by the same single function as every other piece of
+  context (ADR 0006) rather than concatenated by hand. The failed entry and the
+  entries before it are passed as history, ending the slice at the failure so the
+  command being repaired cannot be pushed out of the prompt's window by newer,
+  successful commands.
+  - The model's answer goes through the same `gate` as any generation: classified
+    from the emitted string, blocked if `CRITICAL`, and consented to above SAFE.
+    A "fix" is not a bypass. `--yes` suppresses the prompt only.
+  - The explanation is a diff — `- <failed>` then `+ <repaired>` — so the change
+    is visible without re-reading history. If the model returns the original
+    unchanged, the output says so instead of showing an empty diff.
+  - A clean history (or `--no-history`) is not an error: the output carries
+    "no failed command in history; nothing to fix", no command, and exit 0.
+  - 7 tests in `tests/runtime.rs` against a `FakeEngine` and a temporary store,
+    including redaction of a secret in the failure output, the
+    most-recent-versus-older choice, and a repaired command that is refused as
+    `CRITICAL`.
+  - The `NoEngine` message now names `--fix` alongside generate and complete, since
+    a failure with no model invokes the same error.
+  - **`--complete` resolved.** The roadmap's "returns only the continuation" was
+    set against the full completed command documented in USAGE.md, gcode.1, and
+    plan.md, and against safety invariant 1: emitting a bare suffix would mean the
+    string that is classified is not the string that is shown. `--complete` emits
+    and classifies the whole completed command, and now feeds the partial through
+    `context::prompt::build_prompt` so a credential typed into the partial is
+    redacted before the prompt. Tests cover the full-command classification and
+    the redaction.
+
 - `src/context/env.rs` (Phase 2.2): the environment context. The working directory,
   OS, architecture, `$SHELL` reduced to a program name, its version, and the git
   branch, dirty flag, and last commit subject. Every fact is optional, and a fact
@@ -42,16 +167,27 @@ This rule is what keeps the documentation honest — see
     and XML-escaped there (ADR 0006), because a branch name and a commit subject are
     both free text a user controls. 20 tests, with real git repositories in temporary
     directories and a real subprocess for the shell probe.
-  - Still has no production caller: `build_prompt` is unwired until Phase 1.5 lands
-    the sampler.
+  - `EnvSnapshot::collect` still has no runtime caller: the run loop builds no
+    environment `Context` yet, so `build_prompt` is called with `Context::default()`
+    until Phase 1.5 wires the environment in.
+- The run loop now assembles every generative prompt with
+  `context::prompt::build_prompt` (Phase 1.8): `--generate` joins `--fix` and
+  `--complete`, so the request is redacted and wrapped in the system instruction
+  before it reaches the model, instead of the raw string being handed over. The
+  prompt builder
+  was implemented and tested in 1.7 but had no production caller; wiring it closes
+  an ADR 0006 gap, because a credential pasted into `-c "…"` previously reached the
+  engine unmasked. The environment `Context` is still `Context::default()` until
+  Phase 1.5 wires `EnvSnapshot::collect`. Test:
+  `tests/runtime.rs::a_secret_in_the_request_is_redacted_before_the_prompt`.
 - `src/context/history.rs` (Phase 2.1): the JSONL history store. `HistoryEntry`,
   backwards `read_last(n)` that seeks a chunk at a time and stops at the `n`-th
   newline, single-`write` + `fsync` appends, stats, and rotation at 10 MiB keeping
   the newest 5 MiB as `.1`. A malformed line is skipped with one warning however many
   there are; a torn final line is discarded. 29 tests, including six that inject a
   real IO failure and assert it surfaces as `Error::History` rather than as an empty
-  history. Nothing reads or writes it yet — the shell hook and the prompt wiring are
-  later phases.
+  history. The shell hooks write it and `--fix` reads it; wiring it into the
+  environment context is a later phase.
 - `Prompt::reading` and `Prompt::editing` (Phase 3.6): the prompt's input and editor
   are injectable. `ask` bailed on the first line whenever stdin was not a terminal,
   which left the entire keymap — including re-classification after `e` — untestable.
@@ -209,12 +345,20 @@ This rule is what keeps the documentation honest — see
 
 ### Changed
 
-- A **release** build is refused while `models/registry.toml` carries the
-  placeholder checksum, which is the SHA-256 of the empty string. Debug builds
-  and the test suite are unaffected, so the placeholder blocks shipping without
-  blocking development. A checksum is a claim about the bytes of a specific file
-  and cannot be written honestly without the file; that is the human's to
-  provide, verified once by downloading it.
+- A **release** build is refused while any entry in `models/registry.toml` is
+  `verified = false`. The registry now holds three real, commit-pinned models —
+  `qwen3-0.6b` (default, Arabic and English), `kitty-bash-llm` (English), and
+  `qwen3-1.7b` — with their sizes, URLs, and HuggingFace-published digests
+  (ADR 0018, superseding the ADR 0014 default). The digests are claims until a
+  local download confirms them, which is why every entry is still unverified and
+  no installable artefact can be produced. Debug builds and the test suite are
+  unaffected.
+- CI is a local script, `scripts/ci.sh`, and GitHub Actions was removed from the
+  repository (ADR 0019). The script runs format, clippy, the tests, the policy
+  greps, the secret scan, the man-page lint, and the documentation link check,
+  and prints a skip rather than a pass for anything the machine cannot run. The
+  account was locked for a billing reason and no workflow could execute, so the
+  gate no longer depends on a hosted runner.
 - The numeric defaults moved out of `clap`
 ### Added
 

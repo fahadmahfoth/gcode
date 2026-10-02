@@ -83,6 +83,11 @@ pub struct ModelEntry {
     pub recommended_threads: Option<u32>,
     /// SPDX identifier, recorded for the credits screen and for legal clarity.
     pub license: String,
+    /// Whether the maintainer has hashed the file itself. `build.rs` refuses a
+    /// release build while any shipped entry is unverified; the runtime does not
+    /// require it, so a debug build and the tests work before the download.
+    #[serde(default)]
+    pub verified: bool,
 }
 
 impl ModelEntry {
@@ -215,6 +220,7 @@ impl Registry {
                 context_size: entry.context_size.unwrap_or_default(),
                 recommended_threads: entry.recommended_threads,
                 license: entry.license.unwrap_or_default(),
+                verified: entry.verified.unwrap_or(false),
             })
             .collect();
 
@@ -404,6 +410,7 @@ struct RegistryEntry {
     context_size: Option<u32>,
     recommended_threads: Option<u32>,
     license: Option<String>,
+    verified: Option<bool>,
 }
 
 /// Lowercase ASCII alphanumerics, hyphens, and dots, starting and ending on an
@@ -631,6 +638,20 @@ license = "MIT"
         assert!(registry.get("test-model ").is_none());
     }
 
+    // ── the verified flag ───────────────────────────────────────────────────
+
+    #[test]
+    fn verified_defaults_to_false_and_can_be_set() {
+        // The runtime only needs to read this; `build.rs` is what refuses a
+        // release build. But the value has to survive parsing, or the flag would
+        // read as `false` for every entry and the gate would be a no-op.
+        let registry = Registry::parse(&valid()).unwrap();
+        assert!(!registry.get("test-model").unwrap().verified);
+        let text = valid().replace("license = \"MIT\"", "license = \"MIT\"\nverified = true");
+        let registry = Registry::parse(&text).unwrap();
+        assert!(registry.get("test-model").unwrap().verified);
+    }
+
     // ── display ─────────────────────────────────────────────────────────────
 
     #[test]
@@ -645,6 +666,7 @@ license = "MIT"
             context_size: 4096,
             recommended_threads: Some(4),
             license: "MIT".to_owned(),
+            verified: false,
         };
         assert_eq!(entry.to_string(), "test-model");
     }
@@ -661,6 +683,7 @@ license = "MIT"
             context_size: 4096,
             recommended_threads: None,
             license: "MIT".to_owned(),
+            verified: false,
         };
         // Binary units, because that is how model files are sold. A "400 MB"
         // file that turns out to be 429 MB is how a user decides they were lied

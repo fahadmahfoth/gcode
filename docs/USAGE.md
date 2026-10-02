@@ -158,9 +158,15 @@ v1.0.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--init` | — | Install the history hook for the detected shell |
-| `--init --check` | — | Report hook status, change nothing |
-| `--init --remove` | — | Remove the hook |
+| `--check` | — | Report hook status, change nothing |
+| `--remove` | — | Remove the hook |
+| `--shell <bash\|zsh>` | `$SHELL` | Shell to install for, overriding detection |
 | `--generate-completions <SHELL>` | — | Emit bash/zsh/fish completions to stdout |
+
+`--init`, `--check`, and `--remove` are modes and are mutually exclusive; any two
+of them together is a usage error. `--shell` may only be given with one of them.
+The detected shell comes from `$SHELL`; an unrecognised shell is refused by name
+rather than guessed.
 
 ### Diagnostics
 

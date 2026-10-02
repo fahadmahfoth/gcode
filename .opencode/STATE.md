@@ -2,16 +2,20 @@
 
 > **Maintained by the OpenCode agent.** This file is the quick pointer; the
 > human-readable contract is [../docs/ROADMAP.md](../docs/ROADMAP.md).
-> Last synced by hand: 2026-10-01.
+> Last synced by hand: 2026-10-03.
 
 ```yaml
 phase: 1
 phase_name: Core inference pipeline
 phase_status: in_progress
-first_incomplete_task: 1.8
+first_incomplete_task: 1.5
 
-# Phase 3 was started ahead of the rest of 1.8 because it is pure Rust, has no
-# dependency on the model, and gates everything that later runs a command.
+# Phase 1.5 (the sampler) and 1.6 (the grammar) are the only phase-1 tasks left;
+# both need llama-cpp-rs, a C++ toolchain, and real weights, so they are blocked
+# on the model and disk, not on code. 1.7, 1.8, and the whole of phase 2 are done.
+#
+# Phase 3 was started ahead of 1.5 because it is pure Rust, has no dependency on
+# the model, and gates everything that later runs a command.
 #
 # 3.1-3.5, 3.7, and 3.8 are written, tested, and passing. 3.6 has its keymap, the
 # default-to-no behaviour, the non-interactive refusal, and re-prompting after an
@@ -23,19 +27,34 @@ phases:
   - id: 0
     name: "Repository foundation"
     # Rust half is done and verified on macOS. Still open: the Linux x86_64
-    # build and a green CI run, which is what tasks 0.8 and 0.12 need.
+    # build. The project moved off GitHub Actions (ADR 0019), so the gate is
+    # scripts/ci.sh, run locally, not a workflow. 0.8 and 0.12 are now the local
+    # CI script and the secret scan it performs.
     status: in_progress
     next: false
   - id: 1
     name: "Core inference pipeline"
+    # The model registry now holds three real, commit-pinned entries (ADR 0018),
+    # but all are `verified = false`: the hashes are published by HuggingFace and
+    # have not been confirmed by a local download. A release build is refused
+    # until then. 1.5 (sampler) and 1.6 (grammar) still need llama-cpp-rs, a C++
+    # toolchain, real weights, and disk.
     status: in_progress
     next: true
   - id: 2
     name: "Shell integration & history"
-    # 2.1 and 2.2 are written and verified: the JSONL store (29 tests) and the
-    # environment context (20 tests). Nothing reads or writes the store, and
-    # nothing calls EnvSnapshot::collect, because the shell hooks and the prompt
-    # wiring come later and build_prompt itself is unwired until Phase 1.5.
+    # 2.1 through 2.6 are written and verified: the JSONL store (29 tests), the
+    # environment context (20 tests), the bash hook (27 tests) and zsh hook
+    # (24 tests, each sourcing a real shell), the --init/--check/--remove
+    # installer (45 tests in src/shell/tests.rs plus the hook-mode cases in
+    # tests/runtime.rs), and --fix (7 tests in tests/runtime.rs). The hooks write
+    # the store and --fix now reads it; before 2.6 it was write-only. 2.6 is done:
+    # --fix repairs the newest failed entry, and --complete emits and classifies
+    # the full completed command (the "return only the continuation" wording in
+    # ROADMAP 2.6 was reconciled against USAGE.md/gcode.1/plan.md and invariant 1,
+    # and the partial now goes through build_prompt for redaction). Nothing calls
+    # EnvSnapshot::collect: the run loop builds no environment Context yet, so
+    # build_prompt uses Context::default.
     status: in_progress
   - id: 3
     name: "Safety layer"
@@ -68,44 +87,41 @@ phases:
 
 code_written: true
 tests_written: true
-# Measured with `cargo llvm-cov --summary-only`. Workspace total is 93.0 % of lines
-# / 92.6 % of regions (93.07 % and 92.62 % on the run recorded below). The figure
-# moves by about 0.05 between runs because the context/env tests are timing
-# dependent; quote it to one decimal, not two. context/env.rs 94.51 % lines / 94.98 % regions;
-# context/prompt.rs 97.95 % lines / 96.50 % regions. The modules Phase 1.8 names:
-# runtime 94.23 %,
-# ui/prompt 82.37 %, safety/patterns 98.33 %, safety/classifier 99.20 % (no
-# uncovered line; the region gap is short-circuit right-hand sides),
-# safety/mod 100 %.
-coverage_measured: 93.07
+# Measured with `cargo llvm-cov --summary-only`. Workspace total is 92.7 % of lines
+# / 92.3 % of regions (92.72 % and 92.27 % on the Phase 2.6 run). The figure moves
+# a little between runs because the timing-dependent tests exercise different
+# paths; quote it to one decimal. context/env.rs 96.34 % lines; context/prompt.rs
+# 97.95 %; shell/install.rs 78.08 % (the lowest module: the file-writing branches
+# are only reached on a real disk error, and the happy paths are covered);
+# shell/mod.rs 94.00 %; runtime.rs 87.03 %; context/history.rs 76.79 % (the IO
+# failure branches need a real disk error); ui/prompt.rs 82.37 %;
+# safety/patterns.rs 98.33 %; safety/classifier.rs 99.20 % (no uncovered line; the
+# region gap is short-circuit right-hand sides); safety/mod.rs 100 %.
+coverage_measured: 92.68
 coverage_target: 85
 
 # Everything that needs a human. Empty means nothing is blocked on the human.
 needs_human:
   - >-
-    GitHub Actions is refusing to start jobs: "The job was not started because
-    your account is locked due to a billing issue" (run 36765649289, every job,
-    2026-09-30). This is an account/billing state, not a repository problem,
-    and no change to a workflow can clear it. Until it is resolved, CI cannot
-    verify anything and Phase 0 tasks 0.8 and 0.12 stay open. The user must fix
-    the account.
+    The model registry now holds three real, commit-pinned entries, but all are
+    `verified = false`. The sha256 values are the ones HuggingFace publishes for
+    the LFS objects; they have NOT been confirmed by downloading the files here.
+    ADR 0010 requires a download before a checksum is trusted, and build.rs now
+    refuses a release build while any entry is unverified. Debug builds and the
+    test suite are unaffected. The user must free enough disk, run
+    `gcode --download-model`, compare the digest, and set `verified = true`.
   - >-
-    models/registry.toml holds one placeholder entry, not a real model: its
-    sha256 is the SHA-256 of the empty string and its url points at a .invalid
-    host. A checksum is a claim about the bytes of a specific file and cannot be
-    written honestly without downloading that file, which is also what ADR 0010
-    requires before a sha256 may be recorded. build.rs refuses a release build
-    while the placeholder digest is present, so debug builds and the test suite
-    work and no installable artefact can be produced. The user must supply a
-    real model, its URL, its size, and a checksum they have verified by
-    downloading the file once.
+    Disk is tight: 2.3 GiB free on a 99%-full volume. Phase 1.5's LlamaEngine
+    needs llama-cpp-rs, a C++ toolchain, and real weights, and a C++ build plus
+    several GB of weights will not fit in 2.3 GiB. The user should free 15-20
+    GiB before that task. Until then 1.5's trait, post-processing, and timeout
+    are complete and tested against FakeEngine, and only the sampler is
+    outstanding.
   - >-
-    Disk is tight: 2.3 GiB free on a 99%-full volume. Better than the 281 MiB
-    recorded before, but Phase 1.5's LlamaEngine still needs llama-cpp-rs, a C++
-    toolchain, and real weights, and a C++ build plus several GB of weights will
-    not fit in 2.3 GiB. The user should free 15-20 GiB before that task.
-    Until then 1.5's trait, post-processing, and timeout are complete and tested
-    against FakeEngine, and only the sampler is outstanding.
+    A decision is needed on the release signing mechanism. Keyless Sigstore via
+    GitHub OIDC is no longer available because the project left GitHub Actions
+    (ADR 0019). No release can be signed until a replacement is chosen and
+    documented in a new ADR.
 # Things that will need a human later, so nobody is surprised at the end.
 needs_human_later:
   - AUR account
@@ -127,29 +143,43 @@ platforms_verified:
   - macOS aarch64 (rustc 1.98.1)
 platforms_unverified:
   - Linux x86_64
-last_verified: "macOS aarch64, rustc 1.98.1, after Phase 2.2 environment context (on top of the Phase 2.1 history store and the Phase 1.8/3.6 coverage work): `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 457 passed / 0 failed (388 lib incl. 18 ui/prompt, 29 context/history and 20 context/env, 14 integration, 33 tests/runtime.rs, 19 tests/safety.rs incl. the 10 000-command fuzz, 3 doc); `cargo build --locked` passed; `cargo llvm-cov --summary-only` measured 93.07 % of lines across the workspace; MSRV audit over `cargo metadata --format-version 1 --locked` confirms all 68 locked packages declare rust-version <= 1.75 (up from 65: serde_json, itoa, zmij, all MSRV-compatible). `cargo build --release --locked` FAILS BY DESIGN: build.rs refuses the placeholder model checksum. `mandoc -T lint docs/gcode.1` clean. Secret scan clean apart from three reviewed false positives, all the same illustrative `grep -r 'token=' src/` example (CHANGELOG, redact.rs comment, and the copy of this field in STATE.md). CLI verified by hand: `--explain 'rm -rf /'` exits 0 with no model; `--complete 'ls -'` exits 1 asking for a model; `-c` with no model exits 1 with an honest message; `--fix --explain ls` exits 2; `--version` exits 0; `-c 'delete everything from root' -y` exits 1. Phase 2.2 was verified with real git repositories in temporary directories rather than a fake, because what can break is that real `git status` is slow in a directory it dislikes and that a non-repository is silent rather than an error. Three defects were found by those tests and fixed. The exit status was discarded, so `git` exiting 128 outside a repository was read as a successful empty answer and every directory was reported as a clean repository; `first_line` was applied inside the real shell probe instead of where a version enters the snapshot, so a probe returning a whole multi-line banner bypassed it; and the probe issued four subprocesses under one 30 ms budget, which no machine can meet, so it reported nothing at all. The budget is now 250 ms with both git calls issued concurrently, and the reason is recorded in ROADMAP 2.2 and CHANGELOG rather than left as an unexplained constant. The exit-status fix was mutation-checked: removing it fails `outside_a_repo_there_is_no_error_and_no_git_context`. The 20 context/env tests were run six times with no flake. Two earlier findings in this phase that looked like defects but were not: `RealShell::version` returning a trailing newline is correct, because the one-line guarantee belongs to the snapshot, not to the probe; and the 30 ms figure itself was a specification error rather than a performance regression. Six defects found and fixed by the earlier work: the inference timeout used `thread::scope` and joined, so it only expired after the engine returned; `e` ended the turn instead of looping back to the prompt; `Prompt::writer` took the writer out of `self`, so an injected writer silently received only the first block and every later block fell through to stderr; `gate` passed the literal \"generate\" as the mode, so `--complete` reported `mode: \"generate\"` in `--json`; the trim-and-reject-empty after an edit lived inside the `$EDITOR` path, so an editor returning whitespace passed it through; and `escalate` in classifier.rs was left with no production caller. Two things that looked like defects and were not: a short-circuit right-hand side reported as an uncovered region, and a test helper whose `Scratch` self-deleted before the failure it meant to set up."
+last_verified: >-
+  macOS aarch64, rustc 1.98.1, after the model registry (ADR 0018) and the local
+  CI (ADR 0019) work: `./scripts/ci.sh` exits 0 — fmt clean, clippy
+  `-D warnings` clean, `cargo test` 592 passed / 0 failed (446 lib, 14 tests/api.rs,
+  27 tests/hook_bash.rs, 24 tests/hook_zsh.rs, 59 tests/runtime.rs, 19 tests/safety.rs
+  incl. the 10 000-command fuzz, 3 doc), `cargo build --locked` passed, the policy
+  greps pass, the credential scan matches only the two reviewed false positives,
+  `mandoc -T lint docs/gcode.1` clean, and the documentation link check passes.
+  `cargo build --release --locked` is skipped by the `verified = false` gate;
+  `cargo audit` and `cargo deny` are not installed. `cargo llvm-cov --summary-only`
+  reports 92.68 % lines / 92.26 % regions; model/registry.rs 94.94 % lines;
+  runtime.rs 87.03 %. The local gate's safety-purity grep was fixed to ignore
+  comment lines after it falsely matched the doc comment in `src/safety/mod.rs`
+  that states the module never imports the model.
 
-"macOS aarch64, rustc 1.98.1, after Phase 1.8 run loop and Phase 3.1-3.8: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 388 passed / 0 failed (326 lib incl. 100 safety patterns + 71 safety classifier + 40 context + 29 inference + 28 download + 20 registry + prompt tests, 14 integration, 28 tests/runtime.rs, 17 tests/safety.rs incl. the 10 000-command fuzz, 3 doc); `cargo build --locked` passed; MSRV audit over `cargo metadata --format-version 1 --locked` confirms all 65 locked packages declare rust-version <= 1.75. `cargo build --release --locked` FAILS BY DESIGN: build.rs refuses the placeholder model registry (see needs_human). `mandoc -T lint docs/gcode.1` clean. Secret scan clean apart from two reviewed false positives, both the same illustrative `grep -r 'token=' src/` example. CLI verified by hand: `--explain 'rm -rf /'` exits 0 with a CRITICAL explanation and no model; `--explain --json` emits one object; `-c` with no model exits 1 with an honest message; `--fix --explain ls` exits 2; `--version` exits 0. Eight defects were found and fixed by this work: `targets_for` returned `(path, command)` but was destructured as `(command, path)`, so taint never fired; the SQL matcher compared a whole quoted token against a single word; the home blocklist matched any path under `~`, over-blocking `rm -rf ~/Documents`; the coverage test compared list lengths instead of set equality; `classify_in_env` was over Clippy's 100-line limit; `needs_confirmation` implemented `config.rs`'s 'regardless of --yes', which would have made `--yes` unusable at the default MEDIUM threshold and contradicted the roadmap's own 3.7 test; the `Consenter` trait originally returned a bare yes, so a prompt returning an edited command would have had the core run the pre-edit string; and the first `run()` draft classified the natural-language request instead of the generated command"
 older_previous_last_verified: "macOS aarch64, rustc 1.98.1, after Phase 1.7: `cargo fmt --all -- --check` clean; `cargo clippy --all-targets --all-features -- -D warnings` clean; `cargo test` 223 passed / 0 failed; `cargo build --locked` passed; MSRV audit clean over 65 locked packages; `mandoc -T lint docs/gcode.1` clean; secret scan clean; `cargo build --release --locked` failed by design on the placeholder registry"
 
-last_command: "cargo fmt --all -- --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test, cargo build --locked, cargo llvm-cov --summary-only, the MSRV audit over cargo metadata, cargo build --release --locked (fails by design), mandoc -T lint, the credential-shaped-assignment scan, and six CLI smoke runs"
+last_command: "scripts/ci.sh (fmt, clippy, cargo test, cargo build --locked, policy greps, secret scan, mandoc, doc-link check), cargo llvm-cov --summary-only, cargo build --release --locked (skipped by the verified gate), python3 scripts/check-doc-links.py, and git branch/status checks"
 
 ```
 
 ### Known open items, not yet recorded above
 
-- The CI push trigger was fixed and verified: a push to `master` now produces a
-  run. The run fails, but not on the code — every job reports "The job was not
-  started because your account is locked due to a billing issue". See
-  `needs_human`. Until that clears, the CI-dependent acceptance criteria for
-  Phase 0 and the Linux x86_64 build cannot be settled.
+- There is no GitHub Actions in this repository. The account is locked for a
+  billing reason, so the workflows were removed and CI became `scripts/ci.sh`,
+  run locally (ADR 0019). "CI is green" now means that script exits zero. The
+  consequences — no Linux runner, no automatic release, no OIDC keyless signing
+  — are recorded in ADR 0019 and in `needs_human`.
 - `Cargo.toml`'s release profile sets `panic = "abort"` while ADR 0002 mandates
   `panic = "unwind"`. The comment above the profile claims the profile meets the
   ADR. One of the two is wrong and only the human can say which. Human-only per
   AGENTS.md section 6.
-- `docs/CONTRIBUTING.md` says pull requests target `main`. There is no `main`
-  branch and the default is `master`. The CI push trigger was corrected to
-  `master`; the prose in CONTRIBUTING is still wrong.
+- The canonical branch is `main` (a human decision, 2026-10-03). Local `main`
+  was force-set to the commit that carries the work and checked out; it is ahead
+  of `origin/main` and diverged from it. Nothing has been pushed. `origin/HEAD`
+  still points at `origin/master` until a human pushes `main` and updates the
+  remote default. `docs/CONTRIBUTING.md` now names `main`.
 - Disk: 2.3 GiB free on a 99%-full volume. Phase 1.5 needs `llama-cpp-rs`, which
   builds C++ and will fail partway through on a full disk. `cargo clean` between
   phases, or a larger volume, is the cheapest thing the human can do before then.

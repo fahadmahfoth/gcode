@@ -179,7 +179,7 @@ respect grammar less reliably; a larger one fixes it.
 `--fix` needs a **failed** command in history. Check:
 
 ```bash
-gcode --init --check       # is the hook installed?
+gcode --check       # is the hook installed?
 tail -3 ~/.gcode/history.jsonl
 ```
 
@@ -190,7 +190,7 @@ The file is empty or stale means the hook is not firing.
 ### The hook is not recording anything
 
 ```bash
-gcode --init --check
+gcode --check
 echo $?     # must be 0
 ```
 
@@ -214,7 +214,7 @@ grep -n "gcode" ~/.bashrc
 ### My prompt broke after `gcode --init`
 
 ```bash
-gcode --init --remove
+gcode --remove
 exec $SHELL
 ```
 
@@ -329,7 +329,7 @@ Strip the redirect and re-run, or pipe through `head`.
 | Symptom | Check | Fix |
 |---|---|---|
 | Slow startup | `gcode --bench --no-model` | Should be < 500 ms. If not, a config or hook problem |
-| Slow every prompt | `gcode --init --check` | A slow hook is added cost on every prompt |
+| Slow every prompt | `gcode --check` | A slow hook is added cost on every prompt |
 | High memory | `/usr/bin/time -v gcode -c "..."` | Target < 1.5 GB. Reduce `--context-size` |
 | Output is empty | `gcode --no-color` | Colour codes can confuse a pager |
 
@@ -344,7 +344,7 @@ Strip the redirect and re-run, or pipe through `head`.
 | `gcode --bench` | How slow is it, really? |
 | `gcode --list-models` | What models are available? |
 | `gcode --list-model-paths` | Where is it looking for models? |
-| `gcode --init --check` | Is the shell hook installed? |
+| `gcode --check` | Is the shell hook installed? |
 | `gcode --explain "<cmd>"` | Why is this classified this way? |
 | `gcode -v <cmd> 2>&1` | What actually happened? |
 | `gcode --json -n -c "<req>"` | Scriptable, no colour, no prompts |
