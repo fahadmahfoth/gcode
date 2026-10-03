@@ -19,6 +19,9 @@ pub mod cli;
 pub mod config;
 pub mod context;
 pub mod error;
+
+/// Runs an approved command. Reached only through the run loop's gate.
+pub mod exec;
 pub mod inference;
 pub mod model;
 
@@ -60,6 +63,8 @@ pub struct Output {
     ///
     /// Never `true` without a `Consent::Granted` and a level that permits it.
     pub executed: bool,
+    /// The command's exit status, when it ran. `None` when it did not.
+    pub exit_code: Option<i32>,
 }
 
 impl Output {
@@ -94,6 +99,11 @@ impl Output {
         }
         out.push_str("],\"executed\":");
         out.push_str(if self.executed { "true" } else { "false" });
+        out.push_str(",\"exit_code\":");
+        match self.exit_code {
+            Some(code) => out.push_str(&code.to_string()),
+            None => out.push_str("null"),
+        }
         // Always present, null when there is none. A key that appears only
         // sometimes makes a consumer guess whether it was omitted or empty, and
         // for the hook modes the explanation is the whole result — leaving it out

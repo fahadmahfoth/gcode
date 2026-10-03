@@ -266,6 +266,16 @@ pub enum Error {
     #[error("a model download was requested, but `no_model` is set in the configuration")]
     DownloadRefused,
 
+    /// An approved command could not be started.
+    ///
+    /// Not the command failing: a command that runs and exits non-zero is a
+    /// status, not an error. This is `sh` itself failing to start.
+    #[error("could not run the command: {message}")]
+    Exec {
+        /// What the operating system reported.
+        message: String,
+    },
+
     /// A model download failed.
     ///
     /// Carries the rendered [`DownloadError`](crate::model::download::DownloadError),

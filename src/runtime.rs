@@ -24,8 +24,9 @@ use crate::cli::{Mode, Parsed};
 use crate::error::{Error, Result};
 use std::sync::Arc;
 
-use crate::context::history::History;
+use crate::context::history::{History, HistoryEntry};
 use crate::context::prompt::{build_prompt, Context, HistoryEntry as PromptHistoryEntry};
+use crate::exec::Executor;
 use crate::inference::{GenParams, InferenceEngine};
 use crate::safety::{self, Risk};
 use crate::shell::install::{changed_lines, Installer};
@@ -94,6 +95,19 @@ pub fn config_failure_is_fatal(mode: &Mode) -> bool {
     )
 }
 
+/// What the gate may use to run an approved command and record it.
+///
+/// Optional everywhere, and absent by default: with no `Runner`, no path in the
+/// run loop starts a process, which is how a test, `--json`, and a pipe cannot
+/// execute anything by accident.
+#[derive(Clone, Copy)]
+pub struct Runner<'a> {
+    /// Starts the process.
+    pub executor: &'a dyn Executor,
+    /// Where the executed command is recorded. `None` records nothing.
+    pub history: Option<&'a History>,
+}
+
 /// Runs gcode for an already-parsed command line.
 ///
 /// # Errors
@@ -115,6 +129,7 @@ pub fn run(
         engine,
         consenter,
         always_confirm,
+        None,
         None,
         None,
     )
@@ -141,6 +156,7 @@ pub fn run_configured<'a>(
     always_confirm: Risk,
     transport: Option<&'a dyn crate::model::download::Transport>,
     on_progress: Option<&'a mut dyn FnMut(u64, u64)>,
+    runner: Option<Runner<'a>>,
 ) -> Result<Output> {
     match &parsed.mode {
         Mode::Explain { command } => Ok(explain(command, parsed, &config.blocklist)),
@@ -165,6 +181,7 @@ pub fn run_configured<'a>(
                 consenter,
                 always_confirm,
                 &config.blocklist,
+                runner,
             )
         }
         Mode::Complete { partial } => {
@@ -183,6 +200,7 @@ pub fn run_configured<'a>(
                 consenter,
                 always_confirm,
                 &config.blocklist,
+                None,
             )
         }
         Mode::Init | Mode::Check | Mode::Remove => shell_mode(parsed),
@@ -195,6 +213,7 @@ pub fn run_configured<'a>(
                 always_confirm,
                 &history,
                 &config.blocklist,
+                runner,
             )
         }
         Mode::Interactive => Err(Error::ModeNotWired {
@@ -223,6 +242,7 @@ fn list_models() -> Result<Output> {
         segments: Vec::new(),
         explanation: Some(registry.table()),
         executed: false,
+        exit_code: None,
     })
 }
 
@@ -322,6 +342,7 @@ pub fn download_model<'a>(
         segments: Vec::new(),
         explanation: Some(explanation),
         executed: false,
+        exit_code: None,
     })
 }
 
@@ -357,7 +378,15 @@ pub fn fix(
     always_confirm: Risk,
     history: &History,
 ) -> Result<Output> {
-    fix_with_blocklist(engine, parsed, consenter, always_confirm, history, &[])
+    fix_with_blocklist(
+        engine,
+        parsed,
+        consenter,
+        always_confirm,
+        history,
+        &[],
+        None,
+    )
 }
 
 /// [`fix`] with the user's `safety.blocklist` applied by the gate.
@@ -372,6 +401,7 @@ pub fn fix_with_blocklist(
     always_confirm: Risk,
     history: &History,
     blocklist: &[String],
+    runner: Option<Runner<'_>>,
 ) -> Result<Output> {
     if parsed.no_history {
         return Ok(no_failure());
@@ -407,7 +437,14 @@ pub fn fix_with_blocklist(
     })?;
 
     let original = entries[failed_at].cmd.clone();
-    let mut out = gate(generated, parsed, consenter, always_confirm, blocklist)?;
+    let mut out = gate(
+        generated,
+        parsed,
+        consenter,
+        always_confirm,
+        blocklist,
+        runner,
+    )?;
     out.explanation = Some(fix_explanation(&original, &out.command));
     Ok(out)
 }
@@ -422,6 +459,7 @@ fn no_failure() -> Output {
         segments: Vec::new(),
         explanation: Some("no failed command in history; nothing to fix".to_owned()),
         executed: false,
+        exit_code: None,
     }
 }
 
@@ -511,6 +549,7 @@ fn gate(
     consenter: &mut dyn Consenter,
     always_confirm: Risk,
     blocklist: &[String],
+    runner: Option<Runner<'_>>,
 ) -> Result<Output> {
     let verdict = safety::classify_with(&command, blocklist);
 
@@ -560,15 +599,50 @@ fn gate(
         }
     }
 
-    // Execution. A real shell invocation is Phase 2.3; until then this returns
-    // the verdict rather than pretending the command ran, and `executed: false`
-    // says so in `--json` so nothing downstream can mistake it for a success.
-    //
-    // The engine is deliberately *not* a parameter here. An earlier draft carried
-    // it through and discarded it with `let _ = engine;`, which made it look like
-    // the executor was already wired. When 2.3 needs the engine, it will take it,
-    // and the change will be visible in the diff.
-    Ok(output(&command, &verdict, &parsed.mode.to_string(), false))
+    // Execution. Reached only with a `Runner`, and only after everything above:
+    // CRITICAL refused, `--dry-run` returned, consent obtained or not needed. The
+    // level is checked once more against the command that will actually run, so a
+    // later edit that reorders the code above cannot reach the executor with a
+    // refused command.
+    let Some(runner) = runner else {
+        return Ok(output(&command, &verdict, &parsed.mode.to_string(), false));
+    };
+    if !verdict.level.is_runnable() {
+        return Err(Error::RiskBlocked {
+            level: verdict.level,
+            reasons: verdict.reason_messages(),
+        });
+    }
+
+    let code = runner.executor.run(&command)?;
+    if let Some(history) = runner.history {
+        // A history that cannot be written must not turn a command that already
+        // ran into an error; the command's own status is what the caller needs.
+        let _ = history.append(&executed_entry(&command, code));
+    }
+    let mut out = output(&command, &verdict, &parsed.mode.to_string(), true);
+    out.exit_code = Some(code);
+    Ok(out)
+}
+
+/// The history record for a command that ran.
+///
+/// The output is empty: the command's stdout and stderr go straight to the
+/// terminal and are not captured.
+fn executed_entry(command: &str, code: i32) -> HistoryEntry {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    HistoryEntry {
+        ts,
+        cmd: command.to_owned(),
+        exit: code,
+        cwd,
+        out: String::new(),
+    }
 }
 
 /// Runs one of the three shell-integration modes.
@@ -645,6 +719,7 @@ pub fn shell(mode: &Mode, installer: &Installer) -> Result<Output> {
         segments: Vec::new(),
         explanation: Some(explanation),
         executed: false,
+        exit_code: None,
     })
 }
 
@@ -713,6 +788,7 @@ fn output(command: &str, verdict: &safety::Verdict, mode: &str, executed: bool) 
         segments: verdict.segments.iter().map(|s| s.raw.clone()).collect(),
         explanation: None,
         executed,
+        exit_code: None,
     }
 }
 

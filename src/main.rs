@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use gcode::cli;
 use gcode::config::RiskLevel;
-use gcode::runtime::{run_configured, DenyAll, DEFAULT_CONFIRM_AT};
+use gcode::exec::{Executor, ShellExecutor};
+use gcode::runtime::{run_configured, DenyAll, Runner, DEFAULT_CONFIRM_AT};
 use gcode::safety::Risk;
 use gcode::ui::prompt::Prompt;
 
@@ -20,6 +21,47 @@ use gcode::ui::prompt::Prompt;
 ///
 /// Split out so `main` stays a sequence of decisions rather than a sequence of
 /// error handling, and so the failure path is one function a test can name.
+/// Shows the command on stderr, then runs it. The prompt shows what was
+/// proposed; this shows what actually ran, which matters after an edit and when
+/// a `SAFE` command runs with no prompt at all.
+struct Announcing;
+
+impl Executor for Announcing {
+    fn run(&self, command: &str) -> gcode::Result<i32> {
+        eprintln!("$ {command}");
+        ShellExecutor.run(command)
+    }
+}
+
+/// Where an executed command is recorded, or `None` for `--no-history` or a store
+/// that cannot be opened. Recording is a convenience: it never stops a run.
+fn execution_history(parsed: &gcode::cli::Parsed) -> Option<gcode::context::history::History> {
+    if parsed.no_history {
+        return None;
+    }
+    let overrides = gcode::utils::paths::Overrides::from_env().ok()?;
+    gcode::context::history::History::with_overrides(&overrides).ok()
+}
+
+/// Prints the `--json` result: one object, one line, no colour, no prompt text.
+///
+/// `--list-models` is a list, so its JSON is an array rather than the single
+/// object every command-producing mode emits. `run` assembled the human table;
+/// this re-renders the same registry as JSON.
+fn print_json(parsed: &gcode::cli::Parsed, output: &gcode::Output) {
+    if matches!(parsed.mode, gcode::cli::Mode::ListModels) {
+        match gcode::runtime::list_models_json() {
+            Ok(json) => println!("{json}"),
+            Err(error) => {
+                eprintln!("gcode: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    println!("{}", output.to_json());
+}
+
 fn load_effective_config(
     parsed: &gcode::cli::Parsed,
 ) -> gcode::Result<gcode::config::EffectiveConfig> {
@@ -121,8 +163,16 @@ fn main() {
             always_confirm,
             transport.as_deref(),
             on_progress,
+            None,
         )
     } else {
+        // The only place a `Runner` is built. A pipe and `--json` take the branch
+        // above, which passes none, so neither can start a process.
+        let history = execution_history(&parsed);
+        let runner = Runner {
+            executor: &Announcing,
+            history: history.as_ref(),
+        };
         run_configured(
             &parsed,
             &config,
@@ -131,31 +181,20 @@ fn main() {
             always_confirm,
             transport.as_deref(),
             on_progress,
+            Some(runner),
         )
     };
 
     match outcome {
         Ok(output) => {
             if parsed.json {
-                // `--list-models` is a list, so its JSON is an array rather than
-                // the single object every command-producing mode emits. `run`
-                // assembled the human table; this path re-renders the same
-                // registry as JSON.
-                if matches!(parsed.mode, gcode::cli::Mode::ListModels) {
-                    match gcode::runtime::list_models_json() {
-                        Ok(json) => {
-                            println!("{json}");
-                            return;
-                        }
-                        Err(error) => {
-                            eprintln!("gcode: {error}");
-                            std::process::exit(1);
-                        }
-                    }
-                }
-                // One object, one line, no colour, no prompt text anywhere.
-                println!("{}", output.to_json());
+                print_json(&parsed, &output);
                 return;
+            }
+            // The command ran: stdout belonged to it, so nothing more is printed
+            // there, and gcode reports the command's own status.
+            if let Some(code) = output.exit_code {
+                std::process::exit(code);
             }
             if output.command.is_empty() {
                 // A mode that produces no command — the shell-hook modes. Printing

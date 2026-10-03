@@ -21,9 +21,10 @@ fn arc<T: InferenceEngine + 'static>(engine: &Arc<T>) -> Arc<dyn InferenceEngine
 use gcode::cli::{self, Parsed};
 use gcode::context::history::{History, HistoryEntry};
 use gcode::error::Error;
+use gcode::exec::Executor;
 use gcode::inference::{EngineInfo, GenParams, InferenceEngine};
 use gcode::runtime::{
-    config_failure_is_fatal, fix, run, run_configured, Consenter, Decision, DenyAll,
+    config_failure_is_fatal, fix, run, run_configured, Consenter, Decision, DenyAll, Runner,
 };
 use gcode::safety::Risk;
 
@@ -1221,6 +1222,7 @@ fn run_with_blocklist(
         ALWAYS,
         None,
         None,
+        None,
     )
 }
 
@@ -1286,8 +1288,17 @@ fn an_edit_into_the_users_blocklist_is_re_blocked() {
 fn explain_reports_a_blocklisted_command_as_critical() {
     let config = config_blocking("make deploy");
     let parsed = parse(&["gcode", "--explain", "make deploy"]);
-    let out = run_configured(&parsed, &config, None, &mut DenyAll, ALWAYS, None, None)
-        .expect("explain never errors on a CRITICAL command");
+    let out = run_configured(
+        &parsed,
+        &config,
+        None,
+        &mut DenyAll,
+        ALWAYS,
+        None,
+        None,
+        None,
+    )
+    .expect("explain never errors on a CRITICAL command");
     assert_eq!(out.level, Risk::Critical);
 }
 
@@ -1322,4 +1333,325 @@ fn a_broken_config_does_not_block_the_diagnostic_modes() {
             "{args:?} must stay usable to diagnose a broken install"
         );
     }
+}
+
+// ── the executor: nothing runs unless every gate before it said so ───────────
+
+/// Records what it was asked to run. A real process is never started.
+struct FakeExecutor {
+    ran: Mutex<Vec<String>>,
+    code: i32,
+}
+
+impl FakeExecutor {
+    fn new(code: i32) -> Self {
+        Self {
+            ran: Mutex::new(Vec::new()),
+            code,
+        }
+    }
+
+    fn ran(&self) -> Vec<String> {
+        self.ran.lock().expect("unpoisoned").clone()
+    }
+}
+
+impl Executor for FakeExecutor {
+    fn run(&self, command: &str) -> gcode::Result<i32> {
+        self.ran
+            .lock()
+            .expect("unpoisoned")
+            .push(command.to_owned());
+        Ok(self.code)
+    }
+}
+
+fn scratch_history(tag: &str) -> (History, std::path::PathBuf) {
+    let path = std::env::temp_dir().join(format!("gcode-exec-{}-{tag}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    (History::new(&path), path)
+}
+
+fn run_with_runner(
+    args: &[&str],
+    reply: &str,
+    consenter: &mut dyn Consenter,
+    config: &gcode::config::EffectiveConfig,
+    executor: &FakeExecutor,
+    history: Option<&History>,
+) -> gcode::Result<gcode::Output> {
+    let (parsed, engine) = generate(args, reply);
+    run_configured(
+        &parsed,
+        config,
+        Some(arc(&engine)),
+        consenter,
+        ALWAYS,
+        None,
+        None,
+        Some(Runner { executor, history }),
+    )
+}
+
+#[test]
+fn a_safe_command_runs_and_reports_its_status() {
+    let exec = FakeExecutor::new(0);
+    let out = run_with_runner(
+        &["gcode", "-c", "list files"],
+        "ls -la",
+        &mut DenyAll,
+        &gcode::config::defaults(),
+        &exec,
+        None,
+    )
+    .expect("a SAFE command needs no consent");
+    assert_eq!(exec.ran(), vec!["ls -la".to_owned()]);
+    assert!(out.executed);
+    assert_eq!(out.exit_code, Some(0));
+}
+
+#[test]
+fn the_commands_own_status_is_reported_and_is_not_an_error() {
+    let exec = FakeExecutor::new(7);
+    let out = run_with_runner(
+        &["gcode", "-c", "list files"],
+        "ls -la",
+        &mut DenyAll,
+        &gcode::config::defaults(),
+        &exec,
+        None,
+    )
+    .expect("a failing command is a status");
+    assert_eq!(out.exit_code, Some(7));
+    assert!(
+        out.to_json().contains("\"exit_code\":7"),
+        "{}",
+        out.to_json()
+    );
+}
+
+#[test]
+fn a_command_that_needs_consent_does_not_run_when_consent_is_denied() {
+    let exec = FakeExecutor::new(0);
+    let err = run_with_runner(
+        &["gcode", "-c", "remove it"],
+        "rm -rf ./build",
+        &mut DenyAll,
+        &gcode::config::defaults(),
+        &exec,
+        None,
+    )
+    .expect_err("MEDIUM or above needs a yes");
+    assert!(matches!(err, Error::ConsentDenied { .. }), "{err:?}");
+    assert!(exec.ran().is_empty());
+}
+
+#[test]
+fn a_granted_command_runs_exactly_once() {
+    let exec = FakeExecutor::new(0);
+    let out = run_with_runner(
+        &["gcode", "-c", "remove it"],
+        "rm -rf ./build",
+        &mut Scripted::yes(),
+        &gcode::config::defaults(),
+        &exec,
+        None,
+    )
+    .expect("consent was granted");
+    assert_eq!(exec.ran(), vec!["rm -rf ./build".to_owned()]);
+    assert!(out.executed);
+}
+
+#[test]
+fn yes_skips_the_prompt_and_still_runs_through_the_gate() {
+    let exec = FakeExecutor::new(0);
+    run_with_runner(
+        &["gcode", "-c", "remove it", "--yes"],
+        "rm -rf ./build",
+        &mut DenyAll,
+        &gcode::config::defaults(),
+        &exec,
+        None,
+    )
+    .expect("--yes suppresses the prompt");
+    assert_eq!(exec.ran().len(), 1);
+}
+
+#[test]
+fn critical_never_reaches_the_executor_under_any_flag() {
+    for flags in [
+        &[][..],
+        &["--yes"],
+        &["-y", "--no-history"],
+        &["--yes", "--dry-run"],
+    ] {
+        let exec = FakeExecutor::new(0);
+        let mut args = vec!["gcode", "-c", "wipe it"];
+        args.extend_from_slice(flags);
+        let result = run_with_runner(
+            &args,
+            "rm -rf /",
+            &mut Scripted::yes(),
+            &gcode::config::defaults(),
+            &exec,
+            None,
+        );
+        assert!(
+            matches!(result, Err(Error::RiskBlocked { .. })),
+            "{flags:?}: {result:?}"
+        );
+        assert!(exec.ran().is_empty(), "{flags:?} ran rm -rf /");
+    }
+}
+
+#[test]
+fn a_blocklisted_command_never_reaches_the_executor() {
+    let exec = FakeExecutor::new(0);
+    let result = run_with_runner(
+        &["gcode", "-c", "ship it", "--yes"],
+        "make deploy",
+        &mut Scripted::yes(),
+        &config_blocking("make deploy"),
+        &exec,
+        None,
+    );
+    assert!(
+        matches!(result, Err(Error::RiskBlocked { .. })),
+        "{result:?}"
+    );
+    assert!(exec.ran().is_empty());
+}
+
+#[test]
+fn an_edit_into_critical_does_not_run_the_original_or_the_edit() {
+    let exec = FakeExecutor::new(0);
+    let result = run_with_runner(
+        &["gcode", "-c", "remove it"],
+        "rm -rf ./build",
+        &mut Editor("rm -rf /".to_owned()),
+        &gcode::config::defaults(),
+        &exec,
+        None,
+    );
+    assert!(
+        matches!(result, Err(Error::RiskBlocked { .. })),
+        "{result:?}"
+    );
+    assert!(exec.ran().is_empty());
+}
+
+#[test]
+fn what_runs_is_the_edited_command() {
+    let exec = FakeExecutor::new(0);
+    run_with_runner(
+        &["gcode", "-c", "remove it"],
+        "rm -rf ./build",
+        &mut Editor("rm -rf ./dist".to_owned()),
+        &gcode::config::defaults(),
+        &exec,
+        None,
+    )
+    .expect("an edit to another MEDIUM command is allowed");
+    assert_eq!(exec.ran(), vec!["rm -rf ./dist".to_owned()]);
+}
+
+#[test]
+fn a_dry_run_never_executes() {
+    for flag in ["--dry-run", "-n"] {
+        let exec = FakeExecutor::new(0);
+        let out = run_with_runner(
+            &["gcode", "-c", "list files", flag],
+            "ls -la",
+            &mut DenyAll,
+            &gcode::config::defaults(),
+            &exec,
+            None,
+        )
+        .expect("a dry run succeeds");
+        assert!(exec.ran().is_empty(), "{flag} ran a command");
+        assert!(!out.executed);
+        assert_eq!(out.exit_code, None);
+    }
+}
+
+#[test]
+fn complete_never_executes() {
+    let exec = FakeExecutor::new(0);
+    let out = run_with_runner(
+        &["gcode", "--complete", "find . -name"],
+        "find . -name '*.rs'",
+        &mut DenyAll,
+        &gcode::config::defaults(),
+        &exec,
+        None,
+    )
+    .expect("a completion is printed for the shell to place");
+    assert!(exec.ran().is_empty());
+    assert!(!out.executed);
+}
+
+#[test]
+fn without_a_runner_nothing_executes() {
+    let (parsed, engine) = generate(&["gcode", "-c", "list files"], "ls -la");
+    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("prints");
+    assert!(!out.executed);
+    assert_eq!(out.exit_code, None);
+}
+
+#[test]
+fn an_executed_command_is_recorded_with_its_status() {
+    let exec = FakeExecutor::new(3);
+    let (history, path) = scratch_history("recorded");
+    run_with_runner(
+        &["gcode", "-c", "list files"],
+        "ls -la",
+        &mut DenyAll,
+        &gcode::config::defaults(),
+        &exec,
+        Some(&history),
+    )
+    .expect("runs");
+    let entries = history.read_last(10).expect("readable");
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].cmd, "ls -la");
+    assert_eq!(entries[0].exit, 3);
+}
+
+#[test]
+fn a_command_that_did_not_run_is_not_recorded() {
+    let exec = FakeExecutor::new(0);
+    let (history, path) = scratch_history("not-recorded");
+    let _ = run_with_runner(
+        &["gcode", "-c", "remove it"],
+        "rm -rf ./build",
+        &mut DenyAll,
+        &gcode::config::defaults(),
+        &exec,
+        Some(&history),
+    );
+    let entries = history.read_last(10).expect("a missing file is empty");
+    let _ = std::fs::remove_file(&path);
+    assert!(entries.is_empty(), "{entries:?}");
+}
+
+#[test]
+fn the_real_shell_executor_runs_through_the_gate_and_reports_the_status() {
+    let (parsed, engine) = generate(&["gcode", "-c", "fail with five"], "exit 5");
+    let out = run_configured(
+        &parsed,
+        &gcode::config::defaults(),
+        Some(arc(&engine)),
+        &mut DenyAll,
+        ALWAYS,
+        None,
+        None,
+        Some(Runner {
+            executor: &gcode::exec::ShellExecutor,
+            history: None,
+        }),
+    )
+    .expect("a SAFE or LOW command needs no consent");
+    assert!(out.executed);
+    assert_eq!(out.exit_code, Some(5));
 }
