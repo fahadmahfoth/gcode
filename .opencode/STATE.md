@@ -28,10 +28,11 @@ first_incomplete_task: 1.5
 phases:
   - id: 0
     name: "Repository foundation"
-    # Rust half is done and verified on macOS. Still open: the Linux x86_64
-    # build. The project moved off GitHub Actions (ADR 0019), so the gate is
-    # scripts/ci.sh, run locally, not a workflow. 0.8 and 0.12 are now the local
-    # CI script and the secret scan it performs.
+    # Verified on macOS aarch64 and, 2026-10-03, Linux x86_64: scripts/ci.sh
+    # exits 0 (1 skip: the release build, refused by design while a registry
+    # entry is unverified). The only open item is that release build, which needs
+    # one real model download (blocked here: huggingface.co is not on the
+    # network allowlist). GitHub Actions is not used (ADR 0019).
     status: in_progress
     next: false
   - id: 1

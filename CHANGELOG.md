@@ -14,6 +14,44 @@ This rule is what keeps the documentation honest — see
 
 ## [Unreleased]
 
+### Fixed
+
+- `safety.blocklist` is now applied. `gate` called `safety::classify`, which
+  takes no user list, so an entry in the config file never reached the
+  classifier; `--explain`, `--fix`, `--complete`, and generate now call
+  `classify_with` with the configured list, and an edit at the prompt is
+  re-checked against it. A match is `CRITICAL`, with or without `--yes`.
+- A config file that fails to load now stops every mode that classifies or
+  generates, with exit code 2. It used to print the error and carry on with the
+  defaults, which silently dropped the user's own `always_confirm` and
+  `blocklist`. `--explain`, `--list-models`, `--check`, and `--remove` still run
+  on the defaults so a broken install can be diagnosed and removed.
+- `an_unreadable_rc_file_is_an_error_not_a_silent_install` asserted only when it
+  could read a `0000` file, which is the one case where the assertion is false,
+  and passed vacuously for every other user. The condition is inverted and the
+  skip says that it skipped.
+- The bash and zsh hook tests passed without running when the shell was not
+  installed. They now print a skip, and fail when `GCODE_REQUIRE_SHELLS` is set.
+- `cargo clippy -D warnings` failed on `clippy::doc_markdown` (`SQLite`).
+- `docs/gcode.1` documented twelve options the program does not have
+  (`--doctor`, `--use-model`, `--update-model`, `--verbose`, `--bench`, and
+  others) as if they worked, and a `RUST_LOG` variable and a `gcode doctor`
+  example. They now appear only under "Not yet implemented", and `scripts/ci.sh`
+  fails when the page and `--help` disagree. `README.md` no longer says the
+  program is unwritten, and marks every install route that does not exist as
+  planned.
+
+### Changed
+
+- `scripts/ci.sh --strict` (or `CI_STRICT=1`) turns every skip into a failure and
+  sets `GCODE_REQUIRE_SHELLS`; it also checks the man page against `--help` and
+  enforces 85 % line coverage when `cargo-llvm-cov` is installed.
+- `deny.toml` added (ADR 0009). It allows `MPL-2.0` and `CDLA-Permissive-2.0`,
+  which the ADR's list does not name and which are already in the tree; that
+  needs a maintainer decision.
+- `clap` is bounded to `>=4.5, <4.6`, and `clap_lex` and `indexmap` are bounded
+  directly, so `cargo update` cannot move the lockfile past the 1.75 MSRV.
+
 ### Added
 
 - `--list-models` and `--list-models --json` (Phase 1.3): print the embedded

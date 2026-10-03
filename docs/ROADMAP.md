@@ -64,8 +64,10 @@ only so the design decisions of v1.0 do not paint us into a corner.
 ## Phase 0 — Repository foundation
 
 **Status: 🟡 in progress — the Rust half builds, tests, and lints clean on macOS
-aarch64; the local CI gate runs there. Linux x86_64 is still unverified because
-this project no longer uses GitHub Actions ([ADR 0019](adr/0019-local-ci-not-github-actions.md)) and no Linux machine has run the gate.**
+aarch64 and Linux x86_64; the local CI gate (`scripts/ci.sh`) is green on both
+([ADR 0019](adr/0019-local-ci-not-github-actions.md)). The one open item is the
+release build, which is refused until a registry entry is verified by a real
+download.**
 **Goal: a repository where `cargo build` works on a maintainer's laptop.**
 
 ### Tasks
@@ -79,7 +81,7 @@ this project no longer uses GitHub Actions ([ADR 0019](adr/0019-local-ci-not-git
 | 0.5 | Path resolution | `src/utils/paths.rs` | ✅ 4 env overrides, 22 unit tests |
 | 0.6 | Lint + format config | `.rustfmt.toml`, `.clippy.toml` | ✅ `pedantic` clean |
 | 0.7 | Gitignore, deny list | `.gitignore` | ✅ |
-| 0.8 | CI: fmt, clippy, test, policy greps | `scripts/ci.sh` | ✅ runs green on macOS aarch64; Linux ⬜ |
+| 0.8 | CI: fmt, clippy, test, policy greps | `scripts/ci.sh` | ✅ runs green on macOS aarch64 and Linux x86_64 |
 | 0.9 | Licence, contributing, security policy | `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md` | ✅ |
 | 0.10 | Documentation set | `docs/**` | ✅ |
 | 0.11 | OpenCode agent + command tooling | `.opencode/**`, `AGENTS.md` | ✅ |
@@ -96,8 +98,10 @@ this project no longer uses GitHub Actions ([ADR 0019](adr/0019-local-ci-not-git
 - [x] `cargo test` passes — 34 passed, 0 failed
 - [x] `cargo fmt --check` and `cargo clippy -D warnings` are clean
 - [x] The local CI gate exits zero — `./scripts/ci.sh`
-      — ✅ macOS aarch64 (fmt, clippy, test, greps, docs). ⬜ Linux x86_64:
-      no machine has run it yet.
+      — ✅ macOS aarch64, and ✅ Linux x86_64 (2026-10-03: 0 failed, 1 skipped,
+      the release build, which is refused by design while a registry entry is
+      unverified; includes the man-page check, `cargo llvm-cov` ≥ 85 %,
+      `cargo audit`, and `cargo deny`).
 - [x] `README.md`, `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md` present
 - [x] No credential-shaped string anywhere in the tracked tree
 - [x] `AGENTS.md` tells an agent what to do next
@@ -679,9 +683,10 @@ is deliberately no test that runs the whole binary against the real home.
       `bash` and `zsh`
 - [x] Install is idempotent; remove restores the file exactly
 - [x] History file is `0600` and rotates at 10 MB
-- [ ] Works in both bash and zsh, tested by sourcing real shells in CI — the
-      suites source real shells, but running them in CI is blocked on GitHub
-      Actions billing (see needs-human)
+- [x] Works in both bash and zsh, tested by sourcing real shells — run on Linux
+      x86_64 with bash 5 and zsh 5.9: 27 bash and 24 zsh hook tests pass with
+      `GCODE_REQUIRE_SHELLS=1`. Run through `scripts/ci.sh`, not a hosted
+      workflow ([ADR 0019](adr/0019-local-ci-not-github-actions.md)).
 
 ---
 

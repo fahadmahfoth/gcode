@@ -21,43 +21,50 @@ $ gcode -c "list all files larger than 1GB"
 
 ## Status
 
-**Pre-1.0, and earlier: there is no runnable gcode yet.** The design, the
-decision records, the roadmap, and the agent tooling are written. The Rust
-program is not. Every command in this README is a target interface, built in the
-order defined by [docs/ROADMAP.md](docs/ROADMAP.md). Nothing here is shipped —
-see [CHANGELOG.md](CHANGELOG.md) for the honest list of what exists.
+**Pre-1.0. The safety layer, the shell integration, the history store, the model
+registry, and the downloader are built and tested. The model itself is not wired
+in yet**, so `gcode -c "..."` stops with "no model is loaded" and nothing
+executes a command. What works today is `--explain`, `--list-models`,
+`--download-model`, `--init`, `--check`, and `--remove`. The phase table below is
+a copy of [docs/ROADMAP.md](docs/ROADMAP.md), which is the contract;
+[CHANGELOG.md](CHANGELOG.md) is the only record of what has shipped.
 
 | Phase | Name | Status |
 |---|---|---|
-| 0 | Repository foundation | 🟡 docs and tooling done, code not started |
-| 1 | Core inference pipeline | ⬜ |
-| 2 | Shell integration & history | ⬜ |
-| 3 | Safety layer | ⬜ |
-| 4 | Packaging | ⬜ |
-| 5 | Distribution & CI/CD | ⬜ |
-| 6 | Polish & launch | ⬜ |
+| 0 | Repository foundation | 🟡 builds and passes the local gate; Linux x86_64 unverified |
+| 1 | Core inference pipeline | 🟡 registry, downloader, prompt, and run loop done; engine and grammar open |
+| 2 | Shell integration & history | 🟢 built; acceptance needs the engine |
+| 3 | Safety layer | 🟡 built; the cost estimate needs the engine |
+| 4 | Packaging | ⛔ planned |
+| 5 | Distribution & CI/CD | ⛔ planned |
+| 6 | Polish & launch | ⛔ planned |
 
 ---
 
 ## Install
 
-```bash
-curl -fsSL https://get.gcode.dev | sh
-```
-
-That is the whole thing. It detects your platform, verifies the checksum, picks a
-writable install directory, downloads the model in the background, installs the
-shell integration, and runs a self-test.
-
-Package managers, Docker, and building from source:
-**[docs/INSTALL.md](docs/INSTALL.md)**
+Build from source. This is the only install path that exists today:
 
 ```bash
-brew install gcode/tap/gcode     # macOS
-sudo apt install gcode          # Debian / Ubuntu
-sudo dnf install gcode          # Fedora
-yay -S gcode                    # Arch
+git clone https://github.com/fahadmahfoth/gcode.git
+cd gcode && cargo build --features download
 ```
+
+A `--release` build is refused on purpose until the model checksums in
+`models/registry.toml` are marked `verified` ([ADR 0010](docs/adr/0010-embed-the-model-registry.md)).
+
+The packaged installs below are **⛔ planned (Phases 4 and 5)**. None of these
+commands work yet, and the domain and the package repositories do not exist:
+
+```bash
+curl -fsSL https://get.gcode.dev | sh   # ⛔ planned
+brew install gcode/tap/gcode            # ⛔ planned
+sudo apt install gcode                  # ⛔ planned
+sudo dnf install gcode                  # ⛔ planned
+yay -S gcode                            # ⛔ planned
+```
+
+Platform notes: **[docs/INSTALL.md](docs/INSTALL.md)**
 
 ---
 
@@ -87,7 +94,7 @@ gcode -c "count lines in all python files"   # generate
 gcode --fix                                   # repair the last failed command
 gcode --complete "find /var/log -type f -name" # finish a partial command
 gcode --explain "tar -xzf a.tgz -C /srv"      # explain, never execute
-gcode                                          # interactive session
+gcode                                          # interactive session (⛔ planned)
 ```
 
 Full reference: **[docs/USAGE.md](docs/USAGE.md)**
@@ -101,7 +108,7 @@ hand-written code that never consults the model, so a model persuaded by a
 malicious filename cannot talk its way past it.
 
 `CRITICAL` is not a warning. It is a refusal. `rm -rf /` is unrunnable by
-`--yes`, by `--edit`, and by any config setting. The only way to run one is to
+`--yes`, by editing the command at the prompt, and by any config setting. The only way to run one is to
 type it yourself, outside gcode.
 
 | Not protected against | Why |
@@ -149,8 +156,9 @@ GCODE_NO_HISTORY=1             # stop recording
 
 ## Performance
 
-Targets, measured on 2 physical cores with no GPU. Real numbers from
-`gcode --bench` are in [CHANGELOG.md](CHANGELOG.md).
+Targets, measured on 2 physical cores with no GPU. Nothing
+has been measured against a real model yet; measured numbers will be recorded in
+[CHANGELOG.md](CHANGELOG.md).
 
 | Metric | Target |
 |---|---|

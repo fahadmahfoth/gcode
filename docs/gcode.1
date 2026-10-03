@@ -66,10 +66,6 @@ anything.
 .B \-\-remove
 Remove the shell hook block and the gcode-owned hook file it sources, restoring
 the shell configuration byte for byte.
-.TP
-.B \-\-doctor
-Print a full health report: binary, model, shell hook, permissions, resources,
-and measured inference latency.
 .PP
 With no mode flag, gcode starts an interactive session in which each turn
 inherits the context of the previous turns.
@@ -78,9 +74,6 @@ inherits the context of the previous turns.
 .TP
 .BR \-c ", " \-\-command " " \fIREQUEST\fR
 The natural language request.
-.TP
-.BR \-v ", " \-\-verbose
-Debug logging to standard error.
 .SS Execution control
 .TP
 .BR \-y ", " \-\-yes
@@ -95,14 +88,6 @@ Print the generated command and risk level without executing. Same as
 .TP
 .B \-\-dry\-run
 Print the command and its risk level, then exit.
-.TP
-.B \-\-edit
-Open
-.B $EDITOR
-on the generated command before confirmation. The edited command is
-re-classified, and a command that becomes
-.B CRITICAL
-is refused again.
 .SS Context
 .TP
 .BI \-\-context " " \fIN\fR
@@ -137,12 +122,6 @@ List the models in the registry with sizes and checksums.
 Download a model. Without
 .I NAME
 the default model is downloaded.
-.TP
-.B \-\-update\-model
-Re-download the default model if its checksum has changed.
-.TP
-.BI \-\-use\-model " " \fINAME\fR
-Set the model in the configuration file permanently.
 .TP
 .BI \-\-n\-threads " " \fIN\fR
 Number of inference threads. 0 means all physical cores. Defaults to the
@@ -196,28 +175,7 @@ overriding detection from
 Only valid together with
 .BR \-\-init ", " \-\-check ", or " \-\-remove ,
 which are mutually exclusive.
-.TP
-.BI \-\-generate\-completions " " \fISHELL\fR
-Write shell completions for
-.BR bash ", " zsh ", or " fish
-to standard output.
 .SS Diagnostics
-.TP
-.B \-\-info
-Report the inference backend, thread count, GPU layers, and model details.
-.TP
-.B \-\-bench
-Run the standard benchmark and report p50 and p95 latency, tokens per second,
-and peak memory.
-.TP
-.BI \-\-log\-level " " \fILEVEL\fR
-One of
-.BR error ", " warn ", " info ", " debug ", or " trace .
-Default
-.BR info .
-.TP
-.BI \-\-log\-file " " \fIPATH\fR
-Additionally write logs to a file.
 .TP
 .B \-\-no\-color
 Disable ANSI colour. Colour is disabled automatically when standard output is
@@ -233,16 +191,24 @@ Print the version, commit hash, and build date.
 .BR \-h ", " \-\-help
 Print usage information.
 .SS Not yet implemented
-Not every option below is implemented yet, and the ones that are not are listed
-at the end of this section. They are documented because the interface is settled
-and the man page is meant to be written once. Passing an unimplemented option
-today is an error, not a silent no-op.
+These options are planned and are not in the program. Passing one is a usage
+error, not a silent no-op. They are listed here so that the rest of this page
+describes only what the program does.
 .TP
-.BR \-\-edit ", " \-\-log\-level ", " \-\-log\-file ", " \-\-verbose ", " \-\-quiet ", " \-\-doctor ", " \-\-info ", " \-\-bench ", " \-\-strip\-components ", " \-\-generate\-completions
-Diagnostics, editing, and completion generation.
+.B \-\-verbose ", " \-\-quiet ", " \-\-log\-level ", " \-\-log\-file
+Logging controls.
 .TP
-.BR \-\-list\-models ", " \-\-download\-model ", " \-\-update\-model ", " \-\-use\-model
-Model registry management.
+.B \-\-edit
+Open the generated command in an editor before confirmation.
+.TP
+.B \-\-doctor ", " \-\-info ", " \-\-bench
+Health report, backend report, and benchmark.
+.TP
+.B \-\-update\-model ", " \-\-use\-model
+Re-download the default model, and set the configured model permanently.
+.TP
+.B \-\-generate\-completions
+Write shell completions to standard output.
 .SH INTERACTIVE PROMPT
 When confirmation is required, the following keys are accepted:
 .TP
@@ -379,14 +345,6 @@ Directory the installer writes the binary to.
 .TP
 .B GCODE_HISTORY_FILE
 Path to the history file.
-.TP
-.B RUST_LOG
-Standard
-.B tracing
-filter, honoured by
-.B \-\-verbose
-and
-.BR \-\-log\-level .
 .SH EXAMPLES
 .TP
 Generate a command and review it without executing:
@@ -404,8 +362,8 @@ Explain a command without running it:
 Scripted use with no colour and no prompts:
 .B gcode \-\-json \-n \-c "count files by extension"
 .TP
-Check the installation:
-.B gcode doctor
+Check the shell hook:
+.B gcode \-\-check
 .SH EXIT STATUS
 .TP
 .B 0
