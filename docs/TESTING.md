@@ -169,6 +169,7 @@ The highest-value tests in the project. Every row must have a case.
 | Quoting | `echo 'a; rm -rf /'` → one segment, SAFE | `echo a; rm -rf /` |
 | Taint | `cp x /etc/y && rm /etc/y` → escalated | `cp x /tmp/y` |
 | Edit laundering | `e` turning HIGH into CRITICAL → re-blocked | — |
+| User blocklist | a command containing a `[safety.blocklist]` entry → CRITICAL, with `--yes` too; an edit into the list → re-blocked | `make build` against an entry of `make deploy` |
 | Non-interactive | piped stdin → no execution | — |
 
 ### Config rows
@@ -181,6 +182,7 @@ that must pass and a near miss that must not.
 | Malformed field | the message names the field, e.g. `model.context_size` | a message saying only "invalid config" |
 | Unknown key | refused | silently ignored |
 | Missing file | `Ok(None)` | an error |
+| Broken file | exit 2 for every mode that classifies or generates | silently running on defaults; blocking `--explain`, `--list-models`, `--check`, `--remove` |
 | Precedence | flag beats env beats file beats default | a flag's hidden default outranking the file |
 | `always_confirm` | `SAFE`..`HIGH` accepted | `CRITICAL` accepted |
 | `redact_env` | built-in patterns always present | built-ins removable by config |

@@ -64,7 +64,7 @@ This stage is the one that matters most and is the most commonly gotten wrong.
 
 ### Stage 2 — Blocklist
 
-Exact and prefix matches against `[safety.blocklist]` in config, plus the
+Literal substring matches against `[safety.blocklist]` in config, plus the
 built-in set. A match is CRITICAL and stops everything.
 
 ### Stage 3 — Patterns and structure

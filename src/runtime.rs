@@ -79,6 +79,21 @@ impl Consenter for DenyAll {
     }
 }
 
+/// Whether a config file that fails to load must stop the run.
+///
+/// A malformed file that is silently replaced by defaults drops the user's own
+/// `always_confirm` and `blocklist` without a trace, so every mode that classifies
+/// or generates fails closed. The modes that do not read the config for a
+/// decision stay usable, because they are how a user diagnoses or removes a
+/// broken install.
+#[must_use]
+pub fn config_failure_is_fatal(mode: &Mode) -> bool {
+    !matches!(
+        mode,
+        Mode::Explain { .. } | Mode::ListModels | Mode::Check | Mode::Remove
+    )
+}
+
 /// Runs gcode for an already-parsed command line.
 ///
 /// # Errors
@@ -128,7 +143,7 @@ pub fn run_configured<'a>(
     on_progress: Option<&'a mut dyn FnMut(u64, u64)>,
 ) -> Result<Output> {
     match &parsed.mode {
-        Mode::Explain { command } => Ok(explain(command, parsed)),
+        Mode::Explain { command } => Ok(explain(command, parsed, &config.blocklist)),
         Mode::ListModels => list_models(),
         Mode::DownloadModel { name } => {
             let models_dir = crate::utils::paths::models_dir()?;
@@ -144,7 +159,13 @@ pub fn run_configured<'a>(
                         message: e.to_string(),
                     }
                 })?;
-            gate(command, parsed, consenter, always_confirm)
+            gate(
+                command,
+                parsed,
+                consenter,
+                always_confirm,
+                &config.blocklist,
+            )
         }
         Mode::Complete { partial } => {
             let engine = engine.ok_or(Error::NoEngine)?;
@@ -156,12 +177,25 @@ pub fn run_configured<'a>(
                         message: e.to_string(),
                     }
                 })?;
-            gate(generated, parsed, consenter, always_confirm)
+            gate(
+                generated,
+                parsed,
+                consenter,
+                always_confirm,
+                &config.blocklist,
+            )
         }
         Mode::Init | Mode::Check | Mode::Remove => shell_mode(parsed),
         Mode::Fix => {
             let history = History::with_overrides(&Overrides::from_env()?)?;
-            fix(engine, parsed, consenter, always_confirm, &history)
+            fix_with_blocklist(
+                engine,
+                parsed,
+                consenter,
+                always_confirm,
+                &history,
+                &config.blocklist,
+            )
         }
         Mode::Interactive => Err(Error::ModeNotWired {
             mode: parsed.mode.to_string(),
@@ -323,6 +357,22 @@ pub fn fix(
     always_confirm: Risk,
     history: &History,
 ) -> Result<Output> {
+    fix_with_blocklist(engine, parsed, consenter, always_confirm, history, &[])
+}
+
+/// [`fix`] with the user's `safety.blocklist` applied by the gate.
+///
+/// # Errors
+///
+/// The same errors [`fix`] returns.
+pub fn fix_with_blocklist(
+    engine: Option<Arc<dyn InferenceEngine>>,
+    parsed: &Parsed,
+    consenter: &mut dyn Consenter,
+    always_confirm: Risk,
+    history: &History,
+    blocklist: &[String],
+) -> Result<Output> {
     if parsed.no_history {
         return Ok(no_failure());
     }
@@ -357,7 +407,7 @@ pub fn fix(
     })?;
 
     let original = entries[failed_at].cmd.clone();
-    let mut out = gate(generated, parsed, consenter, always_confirm)?;
+    let mut out = gate(generated, parsed, consenter, always_confirm, blocklist)?;
     out.explanation = Some(fix_explanation(&original, &out.command));
     Ok(out)
 }
@@ -460,8 +510,9 @@ fn gate(
     parsed: &Parsed,
     consenter: &mut dyn Consenter,
     always_confirm: Risk,
+    blocklist: &[String],
 ) -> Result<Output> {
-    let verdict = safety::classify(&command);
+    let verdict = safety::classify_with(&command, blocklist);
 
     // CRITICAL is refused here, before the prompt, before the executor. There is
     // no flag, no config key, and no branch after this that runs the command.
@@ -495,7 +546,7 @@ fn gate(
             }
             Decision::Granted(edited) => {
                 if edited != command {
-                    let rechecked = safety::classify(&edited);
+                    let rechecked = safety::classify_with(&edited, blocklist);
                     if !rechecked.level.is_runnable() {
                         return Err(Error::RiskBlocked {
                             level: rechecked.level,
@@ -669,8 +720,8 @@ fn output(command: &str, verdict: &safety::Verdict, mode: &str, executed: bool) 
 ///
 /// This mode needs no model and no consent, because it runs nothing. That makes
 /// it the one mode that is fully usable before the inference pipeline lands.
-fn explain(command: &str, _parsed: &Parsed) -> Output {
-    let verdict = safety::classify(command);
+fn explain(command: &str, _parsed: &Parsed, blocklist: &[String]) -> Output {
+    let verdict = safety::classify_with(command, blocklist);
     let mut out = output(command, &verdict, "explain", false);
     out.explanation = Some(verdict.explanation());
     // An explain of a CRITICAL command is not an error. The user asked what it

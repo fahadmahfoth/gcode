@@ -22,7 +22,9 @@ use gcode::cli::{self, Parsed};
 use gcode::context::history::{History, HistoryEntry};
 use gcode::error::Error;
 use gcode::inference::{EngineInfo, GenParams, InferenceEngine};
-use gcode::runtime::{fix, run, Consenter, Decision, DenyAll};
+use gcode::runtime::{
+    config_failure_is_fatal, fix, run, run_configured, Consenter, Decision, DenyAll,
+};
 use gcode::safety::Risk;
 
 // ── the fake ────────────────────────────────────────────────────────────────
@@ -1106,23 +1108,25 @@ fn an_unreadable_rc_file_is_an_error_not_a_silent_install() {
             .expect("chmod");
 
         // Root can read a 0000 file, so the assertion is only meaningful as a
-        // normal user. Skipping beats a false pass.
+        // normal user. Skipping beats a false pass, and it says that it skipped.
         let result = shell(&Mode::Init, &scratch.installer(Kind::Bash));
         let readable = fs::read_to_string(scratch.0.join(".bashrc")).is_ok();
         fs::set_permissions(scratch.0.join(".bashrc"), fs::Permissions::from_mode(0o600))
             .expect("chmod back");
 
         if readable {
-            assert!(
-                matches!(result, Err(Error::ShellRcUnreadable { .. })),
-                "wrote to an unreadable rc file: {result:?}"
-            );
-            assert_eq!(
-                fs::read_to_string(scratch.0.join(".bashrc")).unwrap(),
-                USER_RC,
-                "the file was modified"
-            );
+            eprintln!("skipped: running as a user that can read a 0000 file");
+            return;
         }
+        assert!(
+            matches!(result, Err(Error::ShellRcUnreadable { .. })),
+            "wrote to an unreadable rc file: {result:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(scratch.0.join(".bashrc")).unwrap(),
+            USER_RC,
+            "the file was modified"
+        );
     }
 }
 
@@ -1192,4 +1196,130 @@ fn a_hook_mode_reports_itself_through_json() {
     assert!(json.contains("gcode init"), "no report in {json}");
     assert!(json.contains("\"executed\":false"), "{json}");
     assert!(!json.contains('\n'), "not one line: {json}");
+}
+
+// ── the user's own blocklist reaches the gate ───────────────────────────────
+
+fn config_blocking(entry: &str) -> gcode::config::EffectiveConfig {
+    let mut config = gcode::config::defaults();
+    config.blocklist = vec![entry.to_owned()];
+    config
+}
+
+fn run_with_blocklist(
+    args: &[&str],
+    reply: &str,
+    consenter: &mut dyn Consenter,
+    config: &gcode::config::EffectiveConfig,
+) -> gcode::Result<gcode::Output> {
+    let (parsed, engine) = generate(args, reply);
+    run_configured(
+        &parsed,
+        config,
+        Some(arc(&engine)),
+        consenter,
+        ALWAYS,
+        None,
+        None,
+    )
+}
+
+#[test]
+fn a_command_matching_the_users_blocklist_is_refused_as_critical() {
+    let config = config_blocking("make deploy");
+    let err = run_with_blocklist(
+        &["gcode", "-c", "ship it", "--yes"],
+        "make deploy",
+        &mut DenyAll,
+        &config,
+    )
+    .expect_err("a blocklisted command must not pass, even with --yes");
+    assert!(
+        matches!(
+            err,
+            Error::RiskBlocked {
+                level: Risk::Critical,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_near_miss_of_the_users_blocklist_is_not_refused() {
+    let config = config_blocking("make deploy");
+    let out = run_with_blocklist(
+        &["gcode", "-c", "build it", "--dry-run"],
+        "make build",
+        &mut DenyAll,
+        &config,
+    )
+    .expect("a command that does not contain the entry is unaffected");
+    assert_eq!(out.command, "make build");
+    assert_ne!(out.level, Risk::Critical);
+}
+
+#[test]
+fn an_edit_into_the_users_blocklist_is_re_blocked() {
+    let config = config_blocking("make deploy");
+    let err = run_with_blocklist(
+        &["gcode", "-c", "build it"],
+        "chmod +x run.sh",
+        &mut Editor("make deploy".to_owned()),
+        &config,
+    )
+    .expect_err("editing a command into the blocklist must re-block it");
+    assert!(
+        matches!(
+            err,
+            Error::RiskBlocked {
+                level: Risk::Critical,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn explain_reports_a_blocklisted_command_as_critical() {
+    let config = config_blocking("make deploy");
+    let parsed = parse(&["gcode", "--explain", "make deploy"]);
+    let out = run_configured(&parsed, &config, None, &mut DenyAll, ALWAYS, None, None)
+        .expect("explain never errors on a CRITICAL command");
+    assert_eq!(out.level, Risk::Critical);
+}
+
+// ── a config that will not load ─────────────────────────────────────────────
+
+#[test]
+fn a_broken_config_is_fatal_for_the_modes_that_classify_or_generate() {
+    for args in [
+        &["gcode", "-c", "list files"][..],
+        &["gcode", "--fix"],
+        &["gcode", "--complete", "git ch"],
+        &["gcode", "--init"],
+        &["gcode", "--download-model"],
+    ] {
+        assert!(
+            config_failure_is_fatal(&parse(args).mode),
+            "{args:?} must not run on defaults"
+        );
+    }
+}
+
+#[test]
+fn a_broken_config_does_not_block_the_diagnostic_modes() {
+    for args in [
+        &["gcode", "--explain", "ls"][..],
+        &["gcode", "--list-models"],
+        &["gcode", "--check"],
+        &["gcode", "--remove"],
+    ] {
+        assert!(
+            !config_failure_is_fatal(&parse(args).mode),
+            "{args:?} must stay usable to diagnose a broken install"
+        );
+    }
 }
