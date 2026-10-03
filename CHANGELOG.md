@@ -41,6 +41,17 @@ This rule is what keeps the documentation honest — see
   program is unwritten, and marks every install route that does not exist as
   planned.
 
+### Added
+
+- The executor (`src/exec/runner.rs`, [ADR 0023](docs/adr/0023-executor-inherits-stdio.md)):
+  an approved command now runs with `sh -c`, inherited stdio, and gcode exits
+  with the command's status. The gate runs a command only when handed a `Runner`,
+  after the `CRITICAL` block, `--dry-run`, and consent, and re-checks the level
+  immediately before. `main` supplies one only for an interactive terminal
+  without `--json`; a pipe, `--json`, `--complete`, and every test run nothing.
+  Executed commands are appended to the history with their status. `--json` gains
+  `exit_code`. Not reachable in the real binary until the engine lands (1.5).
+
 ### Changed
 
 - `scripts/ci.sh --strict` (or `CI_STRICT=1`) turns every skip into a failure and

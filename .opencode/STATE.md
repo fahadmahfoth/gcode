@@ -24,6 +24,11 @@ first_incomplete_task: 1.5
 # the MEDIUM+ cost estimate, which needs a model to estimate. Phase 3 stays
 # in_progress, not done.
 
+# Executor (ADR 0023): src/exec/runner.rs, the gate's Runner, history append and
+# exit_code are done and tested against a FakeExecutor and the real ShellExecutor.
+# main wires it for an interactive terminal only. It cannot be run end to end until
+# the engine (1.5) exists.
+
 # Phases, in order. `next` is the only actionable one.
 phases:
   - id: 0

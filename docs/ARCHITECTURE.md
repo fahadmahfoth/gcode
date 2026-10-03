@@ -59,7 +59,7 @@ boundaries.
  └──────┬───────┘   `--edit` re-enters the classifier (no laundering)
         │
         ▼
- ┌──────────────┐   sh -c, inherited stdio, captured exit code
+ ┌──────────────┐   sh -c, inherited stdio, exit status
  │   EXECUTOR   │   src/exec/runner.rs
  └──────┬───────┘
         │
@@ -92,7 +92,7 @@ prompt.
 | `src/model/registry.rs` | Known models, names, URLs, hashes | `toml` |
 | `src/safety/patterns.rs` | Regex table: pattern → level → reason | `regex` |
 | `src/safety/classifier.rs` | Blocklist, then patterns, then structural checks | above |
-| `src/exec/runner.rs` | Spawn, stream, capture, timeout | `std::process` |
+| `src/exec/runner.rs` | `sh -c`, inherited stdio, exit status ([ADR 0023](adr/0023-executor-inherits-stdio.md)) | `std::process` |
 | `src/utils/paths.rs` | XDG dirs, model cache, config discovery | `dirs` |
 | `src/ui/` | Colour, prompts, rendering, `--json` output | `dialoguer`, `colored` |
 

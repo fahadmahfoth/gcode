@@ -432,6 +432,31 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
       Getting `ui/prompt.rs` above 80 % required making its input and editor
       injectable — see the note on 3.6
 
+### 1.9 Executor — `src/exec/runner.rs`
+
+Added after the plan was written: the architecture drew the stage, the roadmap
+never listed it, and until now the gate always reported `executed: false`
+([ADR 0023](adr/0023-executor-inherits-stdio.md)).
+
+- [x] `Executor` trait and `ShellExecutor`: `sh -c`, inherited stdio, exit status
+      (`128 + signal` when killed)
+- [x] The gate runs a command only with a `Runner`, after the block, `--dry-run`,
+      and consent, and re-checks the level of the final command before the call
+- [x] `main` builds a `Runner` only for an interactive terminal without `--json`
+- [x] An executed command is appended to history with its status; a command that
+      did not run is not
+- [x] `exit_code` in `--json` (`null` when nothing ran)
+- [x] **Test:** `CRITICAL` never reaches the executor under `--yes`, `-y`,
+      `--dry-run`, or an edit; nor does a blocklisted command or a denied one
+- [x] **Test:** `--dry-run`, `-n`, `--complete`, and no `Runner` never execute
+- [x] **Test:** the edited command is what runs; a status is not an error
+- [x] **Test:** the real `ShellExecutor` through the gate (`exit 5` → `Some(5)`)
+- [x] Measured: `exec/runner.rs` 88.10 % of lines (`cargo llvm-cov`)
+- [ ] End to end in the real binary — **⛔ needs the engine (1.5)**: every mode
+      that reaches the gate needs a model, so `main`'s wiring is compiled and
+      reviewed but not exercised by a run
+- [ ] Output capture and a timeout — not built, by decision (ADR 0023)
+
 ---
 
 ## Phase 2 — Shell integration & history

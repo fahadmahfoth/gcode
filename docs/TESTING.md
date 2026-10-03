@@ -171,6 +171,7 @@ The highest-value tests in the project. Every row must have a case.
 | Edit laundering | `e` turning HIGH into CRITICAL → re-blocked | — |
 | User blocklist | a command containing a `[safety.blocklist]` entry → CRITICAL, with `--yes` too; an edit into the list → re-blocked | `make build` against an entry of `make deploy` |
 | Non-interactive | piped stdin → no execution | — |
+| Executor | `CRITICAL`, a blocklisted command, a denied `MEDIUM`, `--dry-run`, `-n`, `--complete` → the executor is never called | `ls -la` → runs; an approved `rm -rf ./build` → runs once, as edited |
 
 ### Config rows
 

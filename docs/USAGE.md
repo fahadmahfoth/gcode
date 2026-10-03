@@ -126,6 +126,11 @@ v1.0.
 |---|---|---|
 | `-y`, `--yes` | false | Skip the confirmation prompt. **Still classified, still logged.** |
 | `-n`, `--no` | false | Generate and print, never execute (alias of `--dry-run`) |
+
+When a terminal is attached, an approved command from generate or fix is run with
+`sh -c`, and gcode exits with the command's own status. A pipe, `--json`,
+`--complete`, `--dry-run`, and `--explain` never run anything. `CRITICAL` is
+refused first, whatever the flags ([ADR 0023](adr/0023-executor-inherits-stdio.md)).
 | `--dry-run` | false | Print the command and risk, then exit |
 | `--edit` | false | Open `$EDITOR` on the generated command before confirming |
 

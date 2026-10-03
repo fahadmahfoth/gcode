@@ -365,6 +365,9 @@ Scripted use with no colour and no prompts:
 Check the shell hook:
 .B gcode \-\-check
 .SH EXIT STATUS
+When gcode ran the command, its exit status is the command's own, or
+.B 128+N
+if it was killed by signal N. Otherwise:
 .TP
 .B 0
 Success, or the user cancelled.
