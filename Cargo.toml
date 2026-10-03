@@ -74,7 +74,13 @@ dirs = "5"
 # The lockfile additionally pins clap_lex to 1.0.1 for the same reason: its
 # 1.1.x line also requires 1.85. `cargo update` will happily undo both, so the
 # MSRV audit in docs/TESTING.md is not optional.
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = ">=4.5, <4.6", features = ["derive"] }
+
+# MSRV pins for transitive crates. Neither is used directly; the upper bounds
+# exist so that `cargo update` cannot move the lockfile past the 1.75 floor
+# (clap_lex 1.1 and indexmap 2.12 both require a newer compiler).
+clap_lex = ">=1.0, <1.1"
+indexmap = ">=2.11, <2.12"
 
 # Reading the config file (Phase 1.2). toml with the parse feature, and serde for
 # the derive. Both are pure: no I/O beyond reading a file, no network, no

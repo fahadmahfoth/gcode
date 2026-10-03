@@ -2,7 +2,7 @@
 //!
 //! # Why this is a text file
 //!
-//! ADR 0005 considered SQLite, a binary format, the shell's own history file,
+//! ADR 0005 considered `SQLite`, a binary format, the shell's own history file,
 //! and a daemon, and rejected all four. The reasons are worth repeating here
 //! because they are the reason the module looks this simple: greppability is a
 //! feature for a developer-facing tool, truncation is `rm`, and the access
