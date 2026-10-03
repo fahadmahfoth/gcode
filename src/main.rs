@@ -66,15 +66,17 @@ fn main() {
     // `always_confirm` is resolved once, here, so the run loop never touches the
     // filesystem and the CLI never guesses a threshold.
     //
-    // A config that will not load is reported and then set to the documented
-    // default. That is deliberate: refusing to run because a config file is
-    // malformed would be safe but useless, and silently continuing at the
-    // configured-but-unreadable threshold would be neither. The message means
-    // the user learns about it either way.
+    // A config that will not load stops the run for every mode that classifies or
+    // generates, because defaults would silently drop the user's own
+    // `always_confirm` and `blocklist`. The diagnostic modes carry on with the
+    // defaults so a broken install can still be inspected and removed.
     let config = match load_effective_config(&parsed) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("gcode: {error}");
+            if gcode::runtime::config_failure_is_fatal(&parsed.mode) {
+                std::process::exit(2);
+            }
             gcode::config::defaults()
         }
     };

@@ -288,6 +288,12 @@ malformed one is an error, and it names the file, the line, and the field:
 invalid config at /home/user/.config/gcode/config.toml: line 12, model.context_size: invalid type: string "four thousand", expected u32
 ```
 
+A config that fails to load stops every mode that classifies or generates, with
+exit code 2, because falling back to defaults would silently drop your own
+`always_confirm` and `blocklist`. `--explain`, `--list-models`, `--check`, and
+`--remove` still run on the defaults and print the error, so a broken install
+can be diagnosed and removed.
+
 Unknown keys are refused rather than ignored. A misspelled key that is
 silently dropped is a config that appears to do nothing, which is the failure
 this strictness exists to prevent.
@@ -347,9 +353,11 @@ and can never remove them, because redaction is a guarantee the tool makes
 (ADR 0006) rather than a preference the user has. `blocklist` is your list of
 commands you would rather not see, so setting a shorter one is a real choice.
 
-The blocklist is a convenience, not a safety control. The classifier decides
-what is refused to run, and it does not read this list. Clearing the blocklist
-does not make a dangerous command safe.
+A command that contains a blocklist entry, as a literal substring of the
+normalised command, is classified `CRITICAL` and cannot be run, with or without
+`--yes`. An entry can only raise a level. Clearing the list does not make a
+dangerous command safe: the built-in blocklist and the pattern table still
+apply, and they do not read this list.
 
 ---
 
