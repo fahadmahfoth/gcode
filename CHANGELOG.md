@@ -63,8 +63,15 @@ This rule is what keeps the documentation honest — see
   yet**; the model download is blocked by the network policy. The stop rule
   (`inference/stop.rs`) and the bounds are unit-tested; `tests/engine.rs` holds
   four `#[ignore]`d tests for a real model.
-- Still missing: the prompt for generate and complete carries no cwd, OS, git, or
-  history context (`Context::default()`); only `--fix` includes history.
+- The prompt for generate, complete, and fix now carries the real context:
+  `runtime::collect_context` reads the cwd, OS, architecture, shell, git branch,
+  dirty flag, last commit, and the last `context.history_entries` history records,
+  and `main` passes it through the new `run_with_context`. `--no-env`, `--no-git`,
+  `--no-history`, `context.include_{cwd,env,git}`, and `context.history_entries`
+  each remove their own facts. `run_configured` keeps its signature and passes
+  none, so the tests read nothing from the machine. Redaction still happens inside
+  `build_prompt` (ADR 0006), and a history command with a secret is redacted
+  (tested). The history cannot be opened: the prompt simply has none.
 
 ### Changed (branch)
 

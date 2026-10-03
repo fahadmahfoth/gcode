@@ -31,7 +31,7 @@ first_incomplete_task: 1.5
 
 # LlamaEngine (1.5) is written and wired under the inference feature but has never
 # run against real weights: do not tick 1.5 until tests/engine.rs passes with
-# GCODE_TEST_MODEL. generate/complete prompts still carry Context::default().
+# GCODE_TEST_MODEL. Prompts carry the real Context (runtime::collect_context).
 
 # ADR 0024: the default always_confirm is SAFE, so every command is asked about.
 
@@ -70,8 +70,8 @@ phases:
     # the full completed command (the "return only the continuation" wording in
     # ROADMAP 2.6 was reconciled against USAGE.md/gcode.1/plan.md and invariant 1,
     # and the partial now goes through build_prompt for redaction). Nothing calls
-    # EnvSnapshot::collect: the run loop builds no environment Context yet, so
-    # build_prompt uses Context::default.
+    # EnvSnapshot::collect: superseded: main now builds the Context through
+    # runtime::collect_context, so every prompt carries env, git, and history.
     status: in_progress
   - id: 3
     name: "Safety layer"

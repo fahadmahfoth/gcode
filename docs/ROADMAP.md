@@ -546,9 +546,12 @@ a tested format.
 **Partly wired.** `build_prompt` is now called by `--generate`, `--fix`, and
 `--complete`, and `--fix` reads the history store, so the request, a failed
 command, and its output are all redacted before the model sees them. The
-*environment* half is still ahead: the run loop builds no environment `Context`,
-so prompts are assembled with `Context::default()` and nothing calls
-`EnvSnapshot::collect` at runtime until Phase 1.5 wires the engine and its context.
+*environment* half is now wired too: `main` calls `runtime::collect_context`
+(`EnvSnapshot::collect` plus the last `history_entries` records), so generate,
+complete, and fix prompts carry the cwd, OS, shell, git facts, and recent history.
+`--no-env`, `--no-git`, `--no-history`, `include_*`, and `history_entries` each
+remove their own facts, tested through the pure `context_from`; a caller that
+passes no context, the tests above all, gets an empty one and reads nothing.
 Measured coverage: `context/env.rs` 96.34 % of lines, and the workspace total is
 above 92 %.
 
