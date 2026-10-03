@@ -15,17 +15,36 @@
 #
 # Checks that need privileges, a second operating system, or a tool that is not
 # installed are skipped with a printed reason rather than reported as passing.
+#
+# With `--strict` (or CI_STRICT=1) a skip is a failure, and the shell hook tests
+# refuse to pass without bash and zsh installed. A gate that passes because it
+# could not run its checks is not a gate; use this mode where the toolchain is
+# meant to be complete.
 
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
+
+STRICT=0
+if [ "${1:-}" = "--strict" ] || [ "${CI_STRICT:-}" = "1" ]; then
+    STRICT=1
+    export GCODE_REQUIRE_SHELLS=1
+fi
 
 FAILED=0
 SKIPPED=0
 
 pass() { printf '  ok    %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n' "$1"; FAILED=$((FAILED + 1)); }
-skip() { printf '  skip  %s (%s)\n' "$1" "$2"; SKIPPED=$((SKIPPED + 1)); }
+skip() {
+    if [ "$STRICT" = "1" ]; then
+        printf '  FAIL  %s (%s; --strict)\n' "$1" "$2"
+        FAILED=$((FAILED + 1))
+    else
+        printf '  skip  %s (%s)\n' "$1" "$2"
+        SKIPPED=$((SKIPPED + 1))
+    fi
+}
 section() { printf '\n== %s\n' "$1"; }
 
 has() { command -v "$1" >/dev/null 2>&1; }
@@ -120,6 +139,23 @@ else
     pass "credential scan (only the two reviewed false positives)"
 fi
 
+section "man page"
+if has cargo && has comm; then
+    help_flags=$(cargo run -q -- --help 2>/dev/null | grep -oE -- '--[a-z-]+' | sort -u)
+    # Option definitions only: macro lines that do not start an example, and not
+    # the section that lists planned options.
+    man_flags=$(awk '/^\.SS Not yet implemented/{skip=1;next} /^\.SH /{skip=0} !skip' docs/gcode.1 \
+        | sed 's/\\-/-/g' | grep -E '^\.(B|BI|BR) ' | grep -vE '^\.B gcode ' \
+        | grep -oE -- '--[a-z-]+' | sort -u)
+    only_help=$(comm -23 <(printf '%s\n' "$help_flags") <(printf '%s\n' "$man_flags"))
+    only_man=$(comm -13 <(printf '%s\n' "$help_flags") <(printf '%s\n' "$man_flags"))
+    if [ -z "$only_help" ] && [ -z "$only_man" ]; then
+        pass "docs/gcode.1 lists exactly the flags --help lists"
+    else
+        fail "docs/gcode.1 and --help disagree (help only: ${only_help:-none}; man only: ${only_man:-none})"
+    fi
+fi
+
 section "docs"
 if has mandoc; then
     if mandoc -T lint docs/gcode.1; then pass "mandoc -T lint docs/gcode.1"; else fail "mandoc -T lint docs/gcode.1"; fi
@@ -131,6 +167,13 @@ if has python3; then
     if python3 scripts/check-doc-links.py; then pass "internal doc links resolve"; else fail "internal doc links resolve"; fi
 else
     skip "doc link check" "python3 is not installed"
+fi
+
+section "coverage"
+if has cargo-llvm-cov; then
+    if cargo llvm-cov --fail-under-lines 85 >/dev/null; then pass "cargo llvm-cov >= 85% lines"; else fail "cargo llvm-cov >= 85% lines"; fi
+else
+    skip "line coverage" "cargo-llvm-cov is not installed"
 fi
 
 section "supply chain"
