@@ -13,7 +13,7 @@ use std::sync::Arc;
 use gcode::cli;
 use gcode::config::RiskLevel;
 use gcode::exec::{Executor, ShellExecutor};
-use gcode::runtime::{run_configured, DenyAll, Runner, DEFAULT_CONFIRM_AT};
+use gcode::runtime::{run_with_context, DenyAll, Runner, DEFAULT_CONFIRM_AT};
 use gcode::safety::Risk;
 use gcode::ui::prompt::Prompt;
 
@@ -97,6 +97,21 @@ fn build_engine(
     }
 }
 
+/// The machine and history context, for the modes that build a prompt.
+///
+/// The other modes do not pay for reading the machine or running git.
+fn prompt_context(
+    parsed: &gcode::cli::Parsed,
+    config: &gcode::config::EffectiveConfig,
+) -> Option<gcode::context::prompt::Context> {
+    use gcode::cli::Mode;
+    matches!(
+        parsed.mode,
+        Mode::Generate { .. } | Mode::Complete { .. } | Mode::Fix
+    )
+    .then(|| gcode::runtime::collect_context(parsed, config))
+}
+
 fn load_effective_config(
     parsed: &gcode::cli::Parsed,
 ) -> gcode::Result<gcode::config::EffectiveConfig> {
@@ -153,6 +168,7 @@ fn main() {
         }
     };
     let engine = build_engine(&parsed, &config);
+    let context = prompt_context(&parsed, &config);
     let always_confirm = Risk::from(config.always_confirm);
     debug_assert_eq!(
         DEFAULT_CONFIRM_AT,
@@ -186,7 +202,7 @@ fn main() {
     // `DenyAll` are different types; the `DenyAll` variant is what makes the
     // "no prompt in a pipe" rule a compile-time fact about this function.
     let outcome = if parsed.json || !Prompt::is_interactive() {
-        run_configured(
+        run_with_context(
             &parsed,
             &config,
             engine,
@@ -195,6 +211,7 @@ fn main() {
             transport.as_deref(),
             on_progress,
             None,
+            context.as_ref(),
         )
     } else {
         // The only place a `Runner` is built. A pipe and `--json` take the branch
@@ -204,7 +221,7 @@ fn main() {
             executor: &Announcing,
             history: history.as_ref(),
         };
-        run_configured(
+        run_with_context(
             &parsed,
             &config,
             engine,
@@ -213,6 +230,7 @@ fn main() {
             transport.as_deref(),
             on_progress,
             Some(runner),
+            context.as_ref(),
         )
     };
 

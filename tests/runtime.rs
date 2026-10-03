@@ -1708,3 +1708,214 @@ fn the_sampling_params_come_from_the_config() {
     assert_eq!(params.seed, GenParams::default().seed);
     assert_eq!(params.timeout, GenParams::default().timeout);
 }
+
+// ── the prompt carries the machine and the history ───────────────────────────
+
+use gcode::context::env::{EnvSnapshot, GitContext};
+use gcode::context::prompt::Context;
+use gcode::runtime::{context_from, fix_with_blocklist, run_with_context, FixSettings};
+
+fn snapshot() -> EnvSnapshot {
+    EnvSnapshot {
+        cwd: Some("/work/proj".to_owned()),
+        os: Some("linux".to_owned()),
+        arch: Some("x86_64".to_owned()),
+        shell: Some("bash".to_owned()),
+        shell_version: Some("5.2".to_owned()),
+        git: Some(GitContext {
+            branch: Some("feature-x".to_owned()),
+            dirty: Some(true),
+            last_commit: Some("add the thing".to_owned()),
+        }),
+    }
+}
+
+fn record(cmd: &str, exit: i32) -> HistoryEntry {
+    HistoryEntry {
+        ts: 0,
+        cmd: cmd.to_owned(),
+        exit,
+        cwd: "/work/proj".to_owned(),
+        out: String::new(),
+    }
+}
+
+fn prompt_for(args: &[&str], context: Option<&Context>) -> String {
+    let (parsed, engine) = generate(args, "ls");
+    let mut config = gcode::config::defaults();
+    config.history_entries = 15;
+    run_with_context(
+        &parsed,
+        &config,
+        Some(arc(&engine)),
+        &mut Scripted::yes(),
+        ALWAYS,
+        None,
+        None,
+        None,
+        context,
+    )
+    .expect("runs");
+    engine.prompts().join("\n")
+}
+
+#[test]
+fn generate_carries_the_machine_and_the_history() {
+    let parsed = parse(&["gcode", "-c", "list files"]);
+    let config = gcode::config::defaults();
+    let context = context_from(
+        &parsed,
+        &config,
+        snapshot(),
+        &[record("make test", 2), record("git status", 0)],
+    );
+    let prompt = prompt_for(&["gcode", "-c", "list files"], Some(&context));
+    for needle in [
+        "/work/proj",
+        "linux",
+        "feature-x",
+        "make test",
+        "git status",
+    ] {
+        assert!(prompt.contains(needle), "missing {needle}: {prompt}");
+    }
+}
+
+#[test]
+fn without_a_context_the_prompt_reads_nothing_from_the_machine() {
+    let prompt = prompt_for(&["gcode", "-c", "list files"], None);
+    for needle in ["/work/proj", "feature-x", "cwd="] {
+        assert!(!prompt.contains(needle), "unexpected {needle}: {prompt}");
+    }
+}
+
+#[test]
+fn complete_carries_the_context_too() {
+    let parsed = parse(&["gcode", "--complete", "git ch"]);
+    let context = context_from(&parsed, &gcode::config::defaults(), snapshot(), &[]);
+    let prompt = prompt_for(&["gcode", "--complete", "git ch"], Some(&context));
+    assert!(prompt.contains("feature-x"), "{prompt}");
+}
+
+#[test]
+fn a_secret_in_a_history_command_is_redacted_before_the_prompt() {
+    let planted = "sk-QQQQ1111WWWW2222EEEE3333RRRR4444";
+    let parsed = parse(&["gcode", "-c", "x"]);
+    let context = context_from(
+        &parsed,
+        &gcode::config::defaults(),
+        snapshot(),
+        &[record(
+            &format!("curl -H 'X-Key: {planted}' https://example.test"),
+            0,
+        )],
+    );
+    let prompt = prompt_for(&["gcode", "-c", "x"], Some(&context));
+    assert!(!prompt.contains(planted), "{prompt}");
+    assert!(prompt.contains("[REDACTED]"), "{prompt}");
+}
+
+#[test]
+fn fix_carries_the_machine_and_the_failure() {
+    let (history, path) = scratch_history("fix-context");
+    history.append(&record("make deploy", 2)).expect("written");
+    let (parsed, engine) = generate(&["gcode", "--fix", "--yes"], "make build");
+    let context = context_from(&parsed, &gcode::config::defaults(), snapshot(), &[]);
+    fix_with_blocklist(
+        Some(arc(&engine)),
+        &parsed,
+        &mut Scripted::yes(),
+        ALWAYS,
+        &history,
+        &FixSettings {
+            blocklist: &[],
+            params: GenParams::default(),
+            runner: None,
+            context,
+            max_history: 15,
+        },
+    )
+    .expect("fixes");
+    let prompt = engine.prompts().join("\n");
+    let _ = std::fs::remove_file(&path);
+    for needle in ["make deploy", "feature-x", "/work/proj"] {
+        assert!(prompt.contains(needle), "missing {needle}: {prompt}");
+    }
+}
+
+#[test]
+fn no_env_removes_every_machine_fact_and_the_branch() {
+    let parsed = parse(&["gcode", "-c", "x", "--no-env"]);
+    let context = context_from(&parsed, &gcode::config::defaults(), snapshot(), &[]);
+    assert_eq!(context.cwd, None);
+    assert_eq!(context.os, None);
+    assert_eq!(context.shell, None);
+    assert_eq!(context.git_branch, None);
+}
+
+#[test]
+fn no_git_removes_only_the_repository_facts() {
+    let parsed = parse(&["gcode", "-c", "x", "--no-git"]);
+    let context = context_from(&parsed, &gcode::config::defaults(), snapshot(), &[]);
+    assert_eq!(context.git_branch, None);
+    assert_eq!(context.git_last_commit, None);
+    assert_eq!(context.cwd.as_deref(), Some("/work/proj"));
+    assert_eq!(context.os.as_deref(), Some("linux"));
+}
+
+#[test]
+fn the_config_switches_remove_their_own_facts_only() {
+    let parsed = parse(&["gcode", "-c", "x"]);
+    let mut config = gcode::config::defaults();
+    config.include_cwd = false;
+    let context = context_from(&parsed, &config, snapshot(), &[]);
+    assert_eq!(context.cwd, None);
+    assert_eq!(context.os.as_deref(), Some("linux"));
+    assert_eq!(context.git_branch.as_deref(), Some("feature-x"));
+
+    let mut config = gcode::config::defaults();
+    config.include_env = false;
+    let context = context_from(&parsed, &config, snapshot(), &[]);
+    assert_eq!(context.os, None);
+    assert_eq!(context.cwd.as_deref(), Some("/work/proj"));
+}
+
+#[test]
+fn no_history_leaves_the_history_empty_whichever_way_it_is_asked() {
+    let entries = [record("ls", 0)];
+    let flag = parse(&["gcode", "-c", "x", "--no-history"]);
+    assert!(
+        context_from(&flag, &gcode::config::defaults(), snapshot(), &entries)
+            .history
+            .is_empty()
+    );
+
+    let mut config = gcode::config::defaults();
+    config.no_history = true;
+    let plain = parse(&["gcode", "-c", "x"]);
+    assert!(context_from(&plain, &config, snapshot(), &entries)
+        .history
+        .is_empty());
+}
+
+#[test]
+fn history_is_capped_at_the_configured_count_keeping_the_newest() {
+    let mut config = gcode::config::defaults();
+    config.history_entries = 2;
+    let parsed = parse(&["gcode", "-c", "x"]);
+    let entries = [record("one", 0), record("two", 0), record("three", 0)];
+    let context = context_from(&parsed, &config, snapshot(), &entries);
+    let commands: Vec<&str> = context.history.iter().map(|e| e.cmd.as_str()).collect();
+    assert_eq!(commands, ["two", "three"]);
+}
+
+#[test]
+fn collect_context_reads_the_real_machine_and_no_history_when_it_is_off() {
+    let parsed = parse(&["gcode", "-c", "x", "--no-history", "--no-git"]);
+    let context = gcode::runtime::collect_context(&parsed, &gcode::config::defaults());
+    assert_eq!(context.os.as_deref(), Some(std::env::consts::OS));
+    assert!(context.cwd.is_some());
+    assert!(context.history.is_empty());
+    assert_eq!(context.git_branch, None);
+    assert_eq!(context.output_tail_bytes, 2048);
+}

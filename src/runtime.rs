@@ -24,8 +24,10 @@ use crate::cli::{Mode, Parsed};
 use crate::error::{Error, Result};
 use std::sync::Arc;
 
+use crate::context::env::EnvSnapshot;
 use crate::context::history::{History, HistoryEntry};
-use crate::context::prompt::{build_prompt, Context, HistoryEntry as PromptHistoryEntry};
+use crate::context::prompt::{build_prompt_with, Context, HistoryEntry as PromptHistoryEntry};
+use crate::context::redact::{DEFAULT_OUTPUT_TAIL_BYTES, MAX_HISTORY_ENTRIES};
 use crate::exec::Executor;
 use crate::inference::{GenParams, InferenceEngine};
 use crate::safety::{self, Risk};
@@ -108,6 +110,69 @@ pub struct Runner<'a> {
     pub history: Option<&'a History>,
 }
 
+/// A history record as the prompt wants it.
+fn prompt_entry(entry: &HistoryEntry) -> PromptHistoryEntry {
+    let mut prompt_entry = PromptHistoryEntry::new(&entry.cmd, entry.exit);
+    if !entry.out.is_empty() {
+        prompt_entry.out = Some(entry.out.clone());
+    }
+    prompt_entry
+}
+
+/// The machine facts and recent history a prompt carries, from what is known.
+///
+/// Pure: the snapshot and the entries are handed in, so the rules (which switches
+/// remove which facts) are tested without touching the machine. `--no-env` and
+/// `--no-git` come from the command line, `include_*` from the config, and
+/// `no_history` from either. Anything switched off is `None` or empty, never a
+/// placeholder.
+#[must_use]
+pub fn context_from(
+    parsed: &Parsed,
+    config: &crate::config::EffectiveConfig,
+    mut snapshot: EnvSnapshot,
+    entries: &[HistoryEntry],
+) -> Context {
+    if parsed.no_env || !config.include_env {
+        snapshot.os = None;
+        snapshot.arch = None;
+        snapshot.shell = None;
+        snapshot.shell_version = None;
+    }
+    if parsed.no_env || !config.include_cwd {
+        snapshot.cwd = None;
+    }
+    if parsed.no_env || parsed.no_git || !config.include_git {
+        snapshot.git = None;
+    }
+    let mut context = snapshot.into_context();
+    context.output_tail_bytes = config.output_tail_bytes;
+    if !parsed.no_history && !config.no_history {
+        let skip = entries.len().saturating_sub(config.history_entries);
+        context.history = entries[skip..].iter().map(prompt_entry).collect();
+    }
+    context
+}
+
+/// Reads the machine and the history store for the prompt.
+///
+/// Never fails: a fact that cannot be read is left out, and so is a history that
+/// cannot be opened, because neither is a reason to refuse a request. Git runs
+/// with a short deadline (`context::env::GIT_TIMEOUT`).
+#[must_use]
+pub fn collect_context(parsed: &Parsed, config: &crate::config::EffectiveConfig) -> Context {
+    let entries = if parsed.no_history || config.no_history || config.history_entries == 0 {
+        Vec::new()
+    } else {
+        Overrides::from_env()
+            .ok()
+            .and_then(|overrides| History::with_overrides(&overrides).ok())
+            .and_then(|history| history.read_last(config.history_entries).ok())
+            .unwrap_or_default()
+    };
+    context_from(parsed, config, EnvSnapshot::collect(), &entries)
+}
+
 /// The sampling parameters the configuration asks for.
 ///
 /// The seed and the wall-clock ceiling stay at their defaults: a fixed seed keeps a
@@ -172,6 +237,41 @@ pub fn run_configured<'a>(
     on_progress: Option<&'a mut dyn FnMut(u64, u64)>,
     runner: Option<Runner<'a>>,
 ) -> Result<Output> {
+    run_with_context(
+        parsed,
+        config,
+        engine,
+        consenter,
+        always_confirm,
+        transport,
+        on_progress,
+        runner,
+        None,
+    )
+}
+
+/// [`run_configured`] with the context the prompt should carry.
+///
+/// `main` passes the real one from [`collect_context`]. `None` means an empty
+/// context, which is what keeps every other caller, the tests above all, from
+/// reading the machine they happen to run on.
+///
+/// # Errors
+///
+/// The same errors [`run_configured`] returns.
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_context<'a>(
+    parsed: &Parsed,
+    config: &'a crate::config::EffectiveConfig,
+    engine: Option<Arc<dyn InferenceEngine>>,
+    consenter: &mut dyn Consenter,
+    always_confirm: Risk,
+    transport: Option<&'a dyn crate::model::download::Transport>,
+    on_progress: Option<&'a mut dyn FnMut(u64, u64)>,
+    runner: Option<Runner<'a>>,
+    context: Option<&Context>,
+) -> Result<Output> {
+    let base = context.cloned().unwrap_or_default();
     match &parsed.mode {
         Mode::Explain { command } => Ok(explain(command, parsed, &config.blocklist)),
         Mode::ListModels => list_models(),
@@ -182,7 +282,12 @@ pub fn run_configured<'a>(
         Mode::Generate { request } => {
             let engine = engine.ok_or(Error::NoEngine)?;
             let params = gen_params(config);
-            let prompt = build_prompt(request, &Context::default());
+            let prompt = build_prompt_with(
+                request,
+                &base,
+                config.output_tail_bytes,
+                config.history_entries,
+            );
             let command =
                 crate::inference::generate_command(&engine, &prompt, &params).map_err(|e| {
                     Error::Inference {
@@ -201,7 +306,12 @@ pub fn run_configured<'a>(
         Mode::Complete { partial } => {
             let engine = engine.ok_or(Error::NoEngine)?;
             let params = gen_params(config);
-            let prompt = build_prompt(&complete_request(partial), &Context::default());
+            let prompt = build_prompt_with(
+                &complete_request(partial),
+                &base,
+                config.output_tail_bytes,
+                config.history_entries,
+            );
             let generated =
                 crate::inference::generate_command(&engine, &prompt, &params).map_err(|e| {
                     Error::Inference {
@@ -230,6 +340,8 @@ pub fn run_configured<'a>(
                     blocklist: &config.blocklist,
                     params: gen_params(config),
                     runner,
+                    context: base,
+                    max_history: config.history_entries,
                 },
             )
         }
@@ -405,6 +517,8 @@ pub fn fix(
             blocklist: &[],
             params: GenParams::default(),
             runner: None,
+            context: Context::default(),
+            max_history: MAX_HISTORY_ENTRIES,
         },
     )
 }
@@ -417,6 +531,10 @@ pub struct FixSettings<'a> {
     pub params: GenParams,
     /// Runs the corrected command once it is approved.
     pub runner: Option<Runner<'a>>,
+    /// The machine facts for the prompt. Its `history` is replaced by the failure.
+    pub context: Context,
+    /// How many history entries the prompt may carry.
+    pub max_history: usize,
 }
 
 /// [`fix`] with the user's `safety.blocklist` applied by the gate.
@@ -447,19 +565,15 @@ pub fn fix_with_blocklist(
     // newest `MAX_HISTORY_ENTRIES`, so ending the slice at the failure guarantees
     // the failed command is shown even when it is older than that window.
     let context = Context {
-        history: entries[..=failed_at]
-            .iter()
-            .map(|entry| {
-                let mut prompt_entry = PromptHistoryEntry::new(&entry.cmd, entry.exit);
-                if !entry.out.is_empty() {
-                    prompt_entry.out = Some(entry.out.clone());
-                }
-                prompt_entry
-            })
-            .collect(),
-        ..Context::default()
+        history: entries[..=failed_at].iter().map(prompt_entry).collect(),
+        ..settings.context.clone()
     };
-    let prompt = build_prompt(FIX_REQUEST, &context);
+    let prompt = build_prompt_with(
+        FIX_REQUEST,
+        &context,
+        DEFAULT_OUTPUT_TAIL_BYTES,
+        settings.max_history,
+    );
     let generated = crate::inference::generate_command(&engine, &prompt, &settings.params)
         .map_err(|e| Error::Inference {
             message: e.to_string(),
