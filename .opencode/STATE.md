@@ -29,6 +29,8 @@ first_incomplete_task: 1.5
 # main wires it for an interactive terminal only. It cannot be run end to end until
 # the engine (1.5) exists.
 
+# ADR 0024: the default always_confirm is SAFE, so every command is asked about.
+
 # Phases, in order. `next` is the only actionable one.
 phases:
   - id: 0

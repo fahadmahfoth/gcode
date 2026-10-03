@@ -27,9 +27,9 @@ Three separate mechanisms enforce that, and each one alone would be insufficient
 
 | Level | Meaning | Default behaviour |
 |---|---|---|
-| **SAFE** | Read-only, no side effects, bounded cost | Executes on `y`; skipped confirmation at HIGH trust |
+| **SAFE** | Read-only, no side effects, bounded cost | Prompts, like every level; `--yes` or a higher `always_confirm` skips it |
 | **LOW** | Read-only, or trivial reversible write (`touch`, `mkdir`) | Prompts, `[y/N]` default `N` |
-| **MEDIUM** | Broad filesystem walk, package install, service restart, network fetch | Prompts with reason; can be suppressed by `always_confirm` |
+| **MEDIUM** | Broad filesystem walk, package install, service restart, network fetch | Prompts with reason |
 | **HIGH** | Deletes data, changes permissions broadly, pipes network into shell, alters firewall, power state | Prompts with reason; prints the full expanded command |
 | **CRITICAL** | Destroys a filesystem, wipes home, overwrites raw disks, fork bombs | **Hard blocked.** Not runnable, not editable, not overridable. |
 

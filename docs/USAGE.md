@@ -126,13 +126,20 @@ v1.0.
 |---|---|---|
 | `-y`, `--yes` | false | Skip the confirmation prompt. **Still classified, still logged.** |
 | `-n`, `--no` | false | Generate and print, never execute (alias of `--dry-run`) |
+| `--dry-run` | false | Print the command and risk, then exit |
+| `--edit` | false | Open `$EDITOR` on the generated command before confirming |
 
 When a terminal is attached, an approved command from generate or fix is run with
 `sh -c`, and gcode exits with the command's own status. A pipe, `--json`,
 `--complete`, `--dry-run`, and `--explain` never run anything. `CRITICAL` is
 refused first, whatever the flags ([ADR 0023](adr/0023-executor-inherits-stdio.md)).
-| `--dry-run` | false | Print the command and risk, then exit |
-| `--edit` | false | Open `$EDITOR` on the generated command before confirming |
+
+Every command is asked about before it runs, `SAFE` and `LOW` included, unless you
+pass `--yes` or raise `safety.always_confirm`
+([ADR 0024](adr/0024-confirm-every-command-by-default.md)). `--yes` skips the
+question only; classification and the `CRITICAL` refusal still apply. Without a
+terminal there is nobody to ask, so a pipe or `--json` refuses with exit code 1
+unless you add `--yes` or `--dry-run`.
 
 ### Context
 
@@ -261,8 +268,8 @@ include_env = true
 include_cwd = true
 
 [safety]
-# Minimum risk level that always prompts, regardless of --yes
-always_confirm = "MEDIUM"
+# Minimum risk level that prompts. SAFE asks about every command; --yes skips the prompt
+always_confirm = "SAFE"
 # Refuse to ever run these, even with --yes and even if edited
 blocklist = [
   "rm -rf /",
@@ -333,7 +340,7 @@ outrank the file by carrying a hidden default of its own. That is why
 | `context.include_git` | true | — |
 | `context.include_env` | true | — |
 | `context.include_cwd` | true | — |
-| `safety.always_confirm` | MEDIUM | SAFE–HIGH |
+| `safety.always_confirm` | SAFE | SAFE–HIGH |
 | `safety.explain` | true | — |
 | `shell.hook` | true | — |
 | `shell.capture_output` | true | — |

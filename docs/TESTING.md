@@ -170,7 +170,8 @@ The highest-value tests in the project. Every row must have a case.
 | Taint | `cp x /etc/y && rm /etc/y` → escalated | `cp x /tmp/y` |
 | Edit laundering | `e` turning HIGH into CRITICAL → re-blocked | — |
 | User blocklist | a command containing a `[safety.blocklist]` entry → CRITICAL, with `--yes` too; an edit into the list → re-blocked | `make build` against an entry of `make deploy` |
-| Non-interactive | piped stdin → no execution | — |
+| Non-interactive | piped stdin → no execution, `SAFE` included | `--yes` or `--dry-run` in the same pipe |
+| Confirmation | `ls` and `mkdir -p out` → asked about; refused under `DenyAll` | `--complete` of a `SAFE` command; an explicit `always_confirm = "MEDIUM"` |
 | Executor | `CRITICAL`, a blocklisted command, a denied `MEDIUM`, `--dry-run`, `-n`, `--complete` → the executor is never called | `ls -la` → runs; an approved `rm -rf ./build` → runs once, as edited |
 
 ### Config rows

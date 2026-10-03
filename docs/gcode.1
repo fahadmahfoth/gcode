@@ -77,7 +77,8 @@ The natural language request.
 .SS Execution control
 .TP
 .BR \-y ", " \-\-yes
-Skip the confirmation prompt. Classification, the risk line, and history logging
+Skip the confirmation prompt, which every command otherwise gets,
+SAFE and LOW included. Classification, the risk line, and history logging
 still apply. Does not permit
 .B CRITICAL
 commands.
@@ -301,7 +302,9 @@ passes through the argument parser, so it needs checking of its own. The error
 names the file, the line, and the field.
 .PP
 .B safety.always_confirm
-may be
+defaults to
+.BR SAFE ,
+which asks about every command, and may be
 .BR SAFE ,
 .BR LOW ,
 .BR MEDIUM ,

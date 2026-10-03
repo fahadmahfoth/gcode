@@ -41,6 +41,14 @@ This rule is what keeps the documentation honest — see
   program is unwritten, and marks every install route that does not exist as
   planned.
 
+### Changed
+
+- Every command is asked about before it runs, `SAFE` and `LOW` included
+  ([ADR 0024](docs/adr/0024-confirm-every-command-by-default.md)). The default
+  `safety.always_confirm` is now `SAFE`; set it higher to ask less. `--yes` still
+  skips the question only. A pipe or `--json` now refuses a `SAFE` command
+  without `--yes` or `--dry-run`. `--complete` still asks only from `MEDIUM`.
+
 ### Added
 
 - The executor (`src/exec/runner.rs`, [ADR 0023](docs/adr/0023-executor-inherits-stdio.md)):

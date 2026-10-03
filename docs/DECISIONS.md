@@ -65,6 +65,7 @@ How we will know it worked. The signal, and the number.
 | [0021](adr/0021-http-client-behind-a-feature.md) | One HTTP client, optional, confined to the downloader | Accepted | 2026-10-03 |
 | [0022](adr/0022-no-signal-handler.md) | No signal handler; Ctrl+C is the process default | Accepted | 2026-10-03 |
 | [0023](adr/0023-executor-inherits-stdio.md) | The executor runs `sh -c`, inherits stdio, captures nothing | Accepted | 2026-10-03 |
+| [0024](adr/0024-confirm-every-command-by-default.md) | Confirm every command by default | Accepted | 2026-10-03 |
 
 ---
 
