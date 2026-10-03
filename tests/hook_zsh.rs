@@ -24,6 +24,11 @@ fn shell() -> Option<PathBuf> {
             return Some(p.to_path_buf());
         }
     }
+    assert!(
+        std::env::var_os("GCODE_REQUIRE_SHELLS").is_none(),
+        "zsh is not installed and GCODE_REQUIRE_SHELLS is set"
+    );
+    eprintln!("skipped: zsh is not installed");
     None
 }
 

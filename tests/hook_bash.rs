@@ -34,6 +34,11 @@ fn bash() -> Option<PathBuf> {
             return Some(path.to_path_buf());
         }
     }
+    assert!(
+        std::env::var_os("GCODE_REQUIRE_SHELLS").is_none(),
+        "bash is not installed and GCODE_REQUIRE_SHELLS is set"
+    );
+    eprintln!("skipped: bash is not installed");
     None
 }
 
