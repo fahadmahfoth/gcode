@@ -195,7 +195,7 @@ Stop and ask. Do not invent a value.
 - A new third-party dependency with a licence or maintenance question
 - Reversing or amending an ADR
 - Anything that weakens a safety invariant
-- Publishing a release, posting publicly, or merging to `main`
+- Publishing a release, posting publicly, or merging to `master`
 - Removing or renaming a published artefact
 - Anything touching a user's real home directory or shell config
 

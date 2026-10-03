@@ -61,7 +61,7 @@ Everything below is a hard gate. If any item is unchecked, do not tag.
 - [ ] `cargo fmt --check` and `cargo clippy -D warnings` clean
 - [ ] `cargo audit` reports zero unpatched advisories
 - [ ] `./scripts/ci.sh` exits zero on the build host
-- [ ] `main` is the branch being released, and is up to date
+- [ ] `master` is the branch being released, and is up to date
 
 ### Safety
 
@@ -99,7 +99,7 @@ Everything below is a hard gate. If any item is unchecked, do not tag.
 ### 1. Freeze
 
 ```bash
-git checkout main
+git checkout master
 git pull --ff-only
 cargo test && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings
 ```
@@ -123,7 +123,7 @@ version = "1.0.0"
 
 ```bash
 git tag -a v1.0.0 -m "gcode 1.0.0"
-git push origin main --tags
+git push origin master --tags
 ```
 
 Pushing the tag no longer triggers automation. Until a release pipeline is

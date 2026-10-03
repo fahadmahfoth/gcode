@@ -193,10 +193,10 @@ last_command: "scripts/ci.sh (fmt, clippy, cargo test --all-features, cargo buil
   `panic = "unwind"`. The comment above the profile claims the profile meets the
   ADR. One of the two is wrong and only the human can say which. Human-only per
   AGENTS.md section 6.
-- The canonical branch is `main` (a human decision, 2026-10-03). Local `main` and
-  `origin/main` both carry the work; `origin/HEAD` still points at
-  `origin/master` until a human changes the remote default. `docs/CONTRIBUTING.md`
-  names `main`.
+- The canonical branch is `master` (a human decision, 2026-10-03, reversing the
+  earlier choice of `main`). `origin/HEAD` points at it, the work is on it, and
+  `origin/main` was deleted. Protecting `master` against deletion and force pushes
+  is a GitHub setting only the human can change.
 - Disk: 2.3 GiB free on a 99%-full volume. Phase 1.5 needs `llama-cpp-rs`, which
   builds C++ and will fail partway through on a full disk. `cargo clean` between
   phases, or a larger volume, is the cheapest thing the human can do before then.

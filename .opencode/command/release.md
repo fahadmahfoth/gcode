@@ -78,7 +78,7 @@ Verified:  <what verify-release.sh proved, and where>
 Ready:     yes / no, with the blocking item
 
 Needs you — 🔒 every one of these:
-  [ ] git tag -a <v> -m "..." && git push origin main --tags
+  [ ] git tag -a <v> -m "..." && git push origin master --tags
   [ ] Merge the Homebrew formula PR
   [ ] Merge the AUR PR
   [ ] Publish the APT repository (your GPG key)

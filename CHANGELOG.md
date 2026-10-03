@@ -49,6 +49,11 @@ This rule is what keeps the documentation honest — see
   skips the question only. A pipe or `--json` now refuses a `SAFE` command
   without `--yes` or `--dry-run`. `--complete` still asks only from `MEDIUM`.
 
+### Changed (branch)
+
+- `master` is the canonical branch and `origin/main` was deleted. Every document
+  that named `main` as the branch now says `master`.
+
 ### Changed (toolchain)
 
 - The minimum supported Rust is now **1.85**

@@ -46,7 +46,7 @@
 
 ## 6. Publish 🔒 — maintainer only
 
-- [ ] `git tag -a v<version> -m "..."` and `git push origin main --tags`
+- [ ] `git tag -a v<version> -m "..."` and `git push origin master --tags`
 - [ ] GitHub Release created
 - [ ] Homebrew formula PR merged
 - [ ] AUR PR merged

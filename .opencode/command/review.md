@@ -11,7 +11,7 @@ Run a read-only safety audit or a rules review. Nothing is edited.
 
 - `safety` — audit `src/safety/` for holes, false positives, and bypass paths
 - `diff` — review the working diff against `AGENTS.md`
-- `branch` — review the branch against `main`
+- `branch` — review the branch against `master`
 - `adr` — check whether a change reverses a recorded decision
 - empty — do `safety` if `src/safety/` has uncommitted changes, otherwise `diff`
 

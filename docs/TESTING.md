@@ -243,7 +243,7 @@ to run on every segment of every command, unconditionally.
 | macOS 13 | x86_64 | `macos-13` | Intel |
 | Linux | aarch64 | Docker/QEMU | Build only |
 
-Gated on `push` to `main` and on every PR. The full matrix is nightly plus on
+Gated on `push` to `master` and on every PR. The full matrix is nightly plus on
 release tags; PRs run fmt, clippy, unit, integration, and the safety suite only,
 to keep the feedback loop under five minutes.
 

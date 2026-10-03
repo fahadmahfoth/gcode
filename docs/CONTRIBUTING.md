@@ -36,7 +36,7 @@ gcode --download-model
 ## Branches and commits
 
 ```
-main              canonical: PR + a green ./scripts/ci.sh
+master            canonical: PR + a green ./scripts/ci.sh
 ├── feat/<name>
 ├── fix/<name>
 ├── docs/<name>
@@ -45,7 +45,7 @@ main              canonical: PR + a green ./scripts/ci.sh
 
 There is no hosted CI ([ADR 0019](adr/0019-local-ci-not-github-actions.md)).
 Run `./scripts/ci.sh` and paste its output in the PR. A `develop` branch is not
-in use; branch from `main`.
+in use; branch from `master`.
 
 Commit format — [Conventional Commits](https://www.conventionalcommits.org/):
 

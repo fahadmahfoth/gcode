@@ -181,7 +181,7 @@ Back to step 1 for the next slice, until the target is met or you hit a 🔒.
 - Touch anything outside the repository unless the user named the path.
 - Mark a criterion met without having run the verification.
 - Weaken a safety invariant, or add an override for `CRITICAL`.
-- Publish a release, tag, push to `main`, or post publicly.
+- Publish a release, tag, push to `master`, or post publicly.
 - Document a feature as shipped before it is in a released `CHANGELOG.md`.
 
 ## Reference — the agent set

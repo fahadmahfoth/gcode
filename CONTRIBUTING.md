@@ -20,7 +20,7 @@ rules, and the release process.
    cargo test
    ```
 
-4. Open a pull request against `main`. Describe the change, the test that proves
+4. Open a pull request against `master`. Describe the change, the test that proves
    it, and what you deliberately did not do.
 
 ## What will be rejected
