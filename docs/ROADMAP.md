@@ -327,15 +327,20 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
 `FakeEngine`, so the whole pipeline is testable in milliseconds without 400 MB.
 
 - [x] `InferenceEngine` trait as above, with `EngineInfo` and `GenParams`
-- [ ] `LlamaEngine::load(path, ModelParams)` — mmap, warm up — **⛔ needs real
-      weights.** The dependency is in (`llama-cpp-2`, feature `inference`, MSRV
-      raised by ADR 0026) and compiles; cmake and clang are present
+- [ ] `LlamaEngine::load(path, ModelParams)` — mmap, warm up — **written
+      (`src/inference/engine.rs`), compiles, passes clippy, and is wired into
+      `main` under the `inference` feature; ⛔ never run against real weights, so
+      not ticked.** A missing model file gives a clear error in the real binary
+      (checked). The `#[ignore]`d tests in `tests/engine.rs` run with
+      `GCODE_TEST_MODEL` and are what ticks this
 - [x] Load once per process, cache behind a `OnceLock`; a second `install` is
       refused so test order cannot poison the cache
 - [x] `generate()` with temperature, top_p, max_tokens, seed; params validated
       before the engine is called, so a zero `max_tokens` never reaches a model
 - [ ] Stop on EOG, on a newline that closes the command, or at max_tokens —
-      belongs to the sampler, which is the blocked item above
+      the newline rule (`inference/stop.rs`, quotes, backslash, trailing `|`/`&&`)
+      is tested without a model; EOG and `max_tokens` are in the sampling loop
+      and unverified until a model runs it
 - [x] Strip markdown fences, `bash` language tags, `Command:` labels, `$ `
       prompts, and a leading prose line — one function, run before
       classification, so `safety` only ever sees the command

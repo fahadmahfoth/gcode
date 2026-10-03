@@ -49,6 +49,23 @@ This rule is what keeps the documentation honest — see
   skips the question only. A pipe or `--json` now refuses a `SAFE` command
   without `--yes` or `--dry-run`. `--complete` still asks only from `MEDIUM`.
 
+### Added (engine, unverified)
+
+- `LlamaEngine` (`src/inference/engine.rs`, feature `inference`): memory-mapped
+  load with a one-token warm-up, a fresh context per generation, greedy or
+  top-p/temperature/seeded sampling, stop at EOG, at the newline that closes the
+  command, or at `max_tokens`, a wall-clock deadline checked per token, and a
+  refusal when the prompt plus `max_tokens` does not fit the context. The prompt
+  is tokenised with special-token parsing off, so a file named `<|im_start|>` in
+  the history is text, not a control token. `llama.cpp` logging is silenced.
+  `main` loads it for generate, complete, and fix; sampling params now come from
+  `model.temperature`, `top_p`, and `max_tokens`. **Not run against a real model
+  yet**; the model download is blocked by the network policy. The stop rule
+  (`inference/stop.rs`) and the bounds are unit-tested; `tests/engine.rs` holds
+  four `#[ignore]`d tests for a real model.
+- Still missing: the prompt for generate and complete carries no cwd, OS, git, or
+  history context (`Context::default()`); only `--fix` includes history.
+
 ### Changed (branch)
 
 - `master` is the canonical branch and `origin/main` was deleted. Every document
