@@ -125,7 +125,7 @@ fn main() {
     let always_confirm = Risk::from(config.always_confirm);
     debug_assert_eq!(
         DEFAULT_CONFIRM_AT,
-        Risk::from(RiskLevel::Medium),
+        Risk::from(RiskLevel::Safe),
         "the run loop's default and the config default must agree"
     );
 

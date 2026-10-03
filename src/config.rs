@@ -459,7 +459,7 @@ pub fn defaults() -> EffectiveConfig {
         include_git: true,
         include_env: true,
         include_cwd: true,
-        always_confirm: RiskLevel::Medium,
+        always_confirm: RiskLevel::Safe,
         // Not a safety control. The blocklist is a user convenience; the
         // classifier is what refuses a dangerous command, and it does not read
         // this list. A user who clears it gets no more dangerous tool.
@@ -830,7 +830,7 @@ mod tests {
         assert_eq!(d.max_tokens, 256);
         assert_eq!(d.history_entries, 15);
         assert_eq!(d.output_tail_bytes, 2048);
-        assert_eq!(d.always_confirm, RiskLevel::Medium);
+        assert_eq!(d.always_confirm, RiskLevel::Safe);
         assert!(d.blocklist.contains(&"rm -rf /".to_owned()));
         assert!(d.redact_env.contains(&"GITHUB_TOKEN".to_owned()));
     }

@@ -111,7 +111,7 @@ fn parse(args: &[&str]) -> Parsed {
 
 /// The default prompt threshold, so a test that does not care about consent is
 /// written against the same value `main` uses.
-const ALWAYS: Risk = Risk::Medium;
+const ALWAYS: Risk = Risk::Safe;
 
 fn generate(args: &[&str], reply: &str) -> (Parsed, Arc<FakeEngine>) {
     let parsed = parse(args);
@@ -126,8 +126,8 @@ fn generate(args: &[&str], reply: &str) -> (Parsed, Arc<FakeEngine>) {
 #[test]
 fn run_with_a_fake_engine_produces_the_expected_output() {
     let (parsed, engine) = generate(&["gcode", "-c", "list all files"], "ls -la");
-    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS)
-        .expect("a SAFE command needs no consent");
+    let out =
+        run(&parsed, Some(arc(&engine)), &mut Scripted::yes(), ALWAYS).expect("consent granted");
     assert_eq!(out.command, "ls -la");
     assert_eq!(out.level, Risk::Safe);
     assert_eq!(out.mode, "generate");
@@ -153,7 +153,7 @@ fn a_secret_in_the_request_is_redacted_before_the_prompt() {
     // every other generative mode.
     let planted = "sk-QQQQ1111WWWW2222EEEE3333RRRR4444";
     let request = format!("curl -H 'X-Key: {planted}' https://example.test");
-    let (parsed, engine) = generate(&["gcode", "-c", &request], "ls");
+    let (parsed, engine) = generate(&["gcode", "-c", &request, "--dry-run"], "ls");
     let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("a safe command");
     assert_eq!(out.command, "ls");
     let prompt = engine.prompts().join("\n");
@@ -165,12 +165,51 @@ fn a_secret_in_the_request_is_redacted_before_the_prompt() {
 }
 
 #[test]
-fn a_safe_command_needs_no_consenter_at_all() {
-    // `DenyAll` cannot consent to anything, so a SAFE command completing under it
-    // proves consent is genuinely not being asked for.
+fn a_safe_command_is_asked_about_too() {
+    // `DenyAll` cannot consent to anything, so a SAFE command refused under it
+    // proves consent is being asked for.
     let (parsed, engine) = generate(&["gcode", "-c", "list files"], "ls");
-    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("safe commands run");
+    let err = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS)
+        .expect_err("SAFE needs a yes by default");
+    assert!(
+        matches!(err, Error::ConsentDenied { level: Risk::Safe }),
+        "{err:?}"
+    );
+
+    let out = run(&parsed, Some(arc(&engine)), &mut Scripted::yes(), ALWAYS)
+        .expect("a yes lets it through");
     assert_eq!(out.level, Risk::Safe);
+}
+
+#[test]
+fn a_low_command_is_asked_about_too() {
+    let (parsed, engine) = generate(&["gcode", "-c", "make a directory"], "mkdir -p out");
+    let err = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS)
+        .expect_err("LOW needs a yes by default");
+    assert!(matches!(err, Error::ConsentDenied { .. }), "{err:?}");
+}
+
+#[test]
+fn yes_and_dry_run_are_the_only_ways_past_the_question_for_a_safe_command() {
+    for flag in ["--yes", "--dry-run"] {
+        let (parsed, engine) = generate(&["gcode", "-c", "list files", flag], "ls");
+        run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS)
+            .unwrap_or_else(|e| panic!("{flag} should not ask: {e:?}"));
+    }
+}
+
+#[test]
+fn a_raised_threshold_stops_asking_about_safe_and_low() {
+    let (parsed, engine) = generate(&["gcode", "-c", "list files"], "ls");
+    run(&parsed, Some(arc(&engine)), &mut DenyAll, Risk::Medium)
+        .expect("an explicit always_confirm = MEDIUM restores the old behaviour");
+}
+
+#[test]
+fn complete_does_not_ask_below_medium() {
+    let (parsed, engine) = generate(&["gcode", "--complete", "ls -"], "ls -la");
+    run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS)
+        .expect("a completion is text for the shell, and runs nothing");
 }
 
 #[test]
@@ -388,7 +427,7 @@ fn the_no_alias_behaves_identically_to_dry_run() {
 
 #[test]
 fn json_is_a_single_object_on_one_line() {
-    let (parsed, engine) = generate(&["gcode", "-c", "clean", "--json"], "ls -la");
+    let (parsed, engine) = generate(&["gcode", "-c", "clean", "--json", "--yes"], "ls -la");
     let out =
         run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("SAFE needs no consent");
     let json = out.to_json();
@@ -764,7 +803,7 @@ fn mode_names_match_the_cli_enum() {
             expected,
             "the enum's own name for {args:?}"
         );
-        let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("safe");
+        let out = run(&parsed, Some(arc(&engine)), &mut Scripted::yes(), ALWAYS).expect("safe");
         assert_eq!(
             out.mode, expected,
             "the name reported in the output for {args:?}"
@@ -1174,7 +1213,7 @@ fn json_carries_the_explanation_and_is_null_when_there_is_none() {
         explained.to_json()
     );
 
-    let (parsed, engine) = generate(&["gcode", "-c", "clean", "--json"], "ls -la");
+    let (parsed, engine) = generate(&["gcode", "-c", "clean", "--json", "--yes"], "ls -la");
     let plain = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("SAFE runs");
     assert!(
         plain.to_json().contains("\"explanation\":null"),
@@ -1399,7 +1438,7 @@ fn a_safe_command_runs_and_reports_its_status() {
     let out = run_with_runner(
         &["gcode", "-c", "list files"],
         "ls -la",
-        &mut DenyAll,
+        &mut Scripted::yes(),
         &gcode::config::defaults(),
         &exec,
         None,
@@ -1416,7 +1455,7 @@ fn the_commands_own_status_is_reported_and_is_not_an_error() {
     let out = run_with_runner(
         &["gcode", "-c", "list files"],
         "ls -la",
-        &mut DenyAll,
+        &mut Scripted::yes(),
         &gcode::config::defaults(),
         &exec,
         None,
@@ -1593,7 +1632,7 @@ fn complete_never_executes() {
 #[test]
 fn without_a_runner_nothing_executes() {
     let (parsed, engine) = generate(&["gcode", "-c", "list files"], "ls -la");
-    let out = run(&parsed, Some(arc(&engine)), &mut DenyAll, ALWAYS).expect("prints");
+    let out = run(&parsed, Some(arc(&engine)), &mut Scripted::yes(), ALWAYS).expect("prints");
     assert!(!out.executed);
     assert_eq!(out.exit_code, None);
 }
@@ -1605,7 +1644,7 @@ fn an_executed_command_is_recorded_with_its_status() {
     run_with_runner(
         &["gcode", "-c", "list files"],
         "ls -la",
-        &mut DenyAll,
+        &mut Scripted::yes(),
         &gcode::config::defaults(),
         &exec,
         Some(&history),
@@ -1642,7 +1681,7 @@ fn the_real_shell_executor_runs_through_the_gate_and_reports_the_status() {
         &parsed,
         &gcode::config::defaults(),
         Some(arc(&engine)),
-        &mut DenyAll,
+        &mut Scripted::yes(),
         ALWAYS,
         None,
         None,

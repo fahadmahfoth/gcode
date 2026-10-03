@@ -536,7 +536,10 @@ pub fn needs_confirmation(level: Risk, always_confirm: Risk, yes: bool) -> bool 
 ///
 /// Named here rather than imported so the run loop's rule reads in one place. The
 /// two must agree, and a test in `config` asserts that they do.
-pub const DEFAULT_CONFIRM_AT: Risk = Risk::Medium;
+///
+/// `SAFE`, so every command that can run is asked about first; `--yes` is the only
+/// way past the prompt ([ADR 0024](docs/adr/0024-confirm-every-command-by-default.md)).
+pub const DEFAULT_CONFIRM_AT: Risk = Risk::Safe;
 
 /// Classifies `command` and decides whether it may proceed.
 ///
@@ -576,7 +579,15 @@ fn gate(
     // here rather than in `ui`, so no consenter implementation can skip it.
     let mut command = command;
     let mut verdict = verdict;
-    if needs_confirmation(verdict.level, always_confirm, parsed.yes) {
+    //
+    // `--complete` prints text for the shell to place on the line and runs
+    // nothing, so below `MEDIUM` it does not ask, whatever the threshold.
+    let threshold = if matches!(parsed.mode, Mode::Complete { .. }) {
+        always_confirm.max(Risk::Medium)
+    } else {
+        always_confirm
+    };
+    if needs_confirmation(verdict.level, threshold, parsed.yes) {
         match consenter.ask(&command, &verdict) {
             Decision::Denied => {
                 return Err(Error::ConsentDenied {
