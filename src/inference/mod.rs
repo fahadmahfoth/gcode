@@ -22,6 +22,13 @@
 //!    the returned string, because a runaway generation is a memory problem as
 //!    well as a correctness one.
 
+mod stop;
+pub use stop::command_is_complete;
+
+/// The llama.cpp engine. Compiled only with the `inference` feature.
+#[cfg(feature = "inference")]
+pub mod engine;
+
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;

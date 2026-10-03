@@ -1694,3 +1694,17 @@ fn the_real_shell_executor_runs_through_the_gate_and_reports_the_status() {
     assert!(out.executed);
     assert_eq!(out.exit_code, Some(5));
 }
+
+#[test]
+fn the_sampling_params_come_from_the_config() {
+    let mut config = gcode::config::defaults();
+    config.temperature = 0.7;
+    config.top_p = 0.9;
+    config.max_tokens = 64;
+    let params = gcode::runtime::gen_params(&config);
+    assert!((params.temperature - 0.7).abs() < f32::EPSILON);
+    assert!((params.top_p - 0.9).abs() < f32::EPSILON);
+    assert_eq!(params.max_tokens, 64);
+    assert_eq!(params.seed, GenParams::default().seed);
+    assert_eq!(params.timeout, GenParams::default().timeout);
+}

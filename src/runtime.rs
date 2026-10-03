@@ -108,6 +108,20 @@ pub struct Runner<'a> {
     pub history: Option<&'a History>,
 }
 
+/// The sampling parameters the configuration asks for.
+///
+/// The seed and the wall-clock ceiling stay at their defaults: a fixed seed keeps a
+/// bug report reproducible, and the timeout is a safety bound, not a preference.
+#[must_use]
+pub fn gen_params(config: &crate::config::EffectiveConfig) -> GenParams {
+    GenParams {
+        temperature: config.temperature,
+        top_p: config.top_p,
+        max_tokens: config.max_tokens,
+        ..GenParams::default()
+    }
+}
+
 /// Runs gcode for an already-parsed command line.
 ///
 /// # Errors
@@ -167,7 +181,7 @@ pub fn run_configured<'a>(
         }
         Mode::Generate { request } => {
             let engine = engine.ok_or(Error::NoEngine)?;
-            let params = GenParams::default();
+            let params = gen_params(config);
             let prompt = build_prompt(request, &Context::default());
             let command =
                 crate::inference::generate_command(&engine, &prompt, &params).map_err(|e| {
@@ -186,7 +200,7 @@ pub fn run_configured<'a>(
         }
         Mode::Complete { partial } => {
             let engine = engine.ok_or(Error::NoEngine)?;
-            let params = GenParams::default();
+            let params = gen_params(config);
             let prompt = build_prompt(&complete_request(partial), &Context::default());
             let generated =
                 crate::inference::generate_command(&engine, &prompt, &params).map_err(|e| {
@@ -212,8 +226,11 @@ pub fn run_configured<'a>(
                 consenter,
                 always_confirm,
                 &history,
-                &config.blocklist,
-                runner,
+                &FixSettings {
+                    blocklist: &config.blocklist,
+                    params: gen_params(config),
+                    runner,
+                },
             )
         }
         Mode::Interactive => Err(Error::ModeNotWired {
@@ -384,9 +401,22 @@ pub fn fix(
         consenter,
         always_confirm,
         history,
-        &[],
-        None,
+        &FixSettings {
+            blocklist: &[],
+            params: GenParams::default(),
+            runner: None,
+        },
     )
+}
+
+/// What [`fix_with_blocklist`] needs beyond the engine, the prompt, and the history.
+pub struct FixSettings<'a> {
+    /// The user's `safety.blocklist`.
+    pub blocklist: &'a [String],
+    /// How to sample.
+    pub params: GenParams,
+    /// Runs the corrected command once it is approved.
+    pub runner: Option<Runner<'a>>,
 }
 
 /// [`fix`] with the user's `safety.blocklist` applied by the gate.
@@ -400,9 +430,10 @@ pub fn fix_with_blocklist(
     consenter: &mut dyn Consenter,
     always_confirm: Risk,
     history: &History,
-    blocklist: &[String],
-    runner: Option<Runner<'_>>,
+    settings: &FixSettings<'_>,
 ) -> Result<Output> {
+    let blocklist = settings.blocklist;
+    let runner = settings.runner;
     if parsed.no_history {
         return Ok(no_failure());
     }
@@ -429,12 +460,10 @@ pub fn fix_with_blocklist(
         ..Context::default()
     };
     let prompt = build_prompt(FIX_REQUEST, &context);
-    let params = GenParams::default();
-    let generated = crate::inference::generate_command(&engine, &prompt, &params).map_err(|e| {
-        Error::Inference {
+    let generated = crate::inference::generate_command(&engine, &prompt, &settings.params)
+        .map_err(|e| Error::Inference {
             message: e.to_string(),
-        }
-    })?;
+        })?;
 
     let original = entries[failed_at].cmd.clone();
     let mut out = gate(

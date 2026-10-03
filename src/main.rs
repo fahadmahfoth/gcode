@@ -62,6 +62,41 @@ fn print_json(parsed: &gcode::cli::Parsed, output: &gcode::Output) {
     println!("{}", output.to_json());
 }
 
+/// The engine for the modes that generate, or `None` for the ones that do not.
+///
+/// A build without the `inference` feature has no engine at all, so the
+/// generating modes report that no model is loaded, as before. With it, a missing
+/// or unloadable model stops the run here with its reason rather than later with a
+/// generic one. `no_model` in the config also means no engine.
+fn build_engine(
+    parsed: &gcode::cli::Parsed,
+    config: &gcode::config::EffectiveConfig,
+) -> Option<Arc<dyn gcode::inference::InferenceEngine>> {
+    use gcode::cli::Mode;
+    if config.no_model
+        || !matches!(
+            parsed.mode,
+            Mode::Generate { .. } | Mode::Complete { .. } | Mode::Fix
+        )
+    {
+        return None;
+    }
+    #[cfg(feature = "inference")]
+    {
+        match gcode::inference::engine::load_configured(config) {
+            Ok(engine) => Some(Arc::new(engine)),
+            Err(error) => {
+                eprintln!("gcode: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    #[cfg(not(feature = "inference"))]
+    {
+        None
+    }
+}
+
 fn load_effective_config(
     parsed: &gcode::cli::Parsed,
 ) -> gcode::Result<gcode::config::EffectiveConfig> {
@@ -100,11 +135,6 @@ fn main() {
         }
     };
 
-    // No model is loaded until Phase 1.5 lands the sampler, so the modes that
-    // generate a command report that honestly rather than inventing a plausible
-    // answer. `--explain` needs no model, which is why it works today.
-    let engine: Option<Arc<dyn gcode::inference::InferenceEngine>> = None;
-
     // `always_confirm` is resolved once, here, so the run loop never touches the
     // filesystem and the CLI never guesses a threshold.
     //
@@ -122,6 +152,7 @@ fn main() {
             gcode::config::defaults()
         }
     };
+    let engine = build_engine(&parsed, &config);
     let always_confirm = Risk::from(config.always_confirm);
     debug_assert_eq!(
         DEFAULT_CONFIRM_AT,
