@@ -49,6 +49,15 @@ This rule is what keeps the documentation honest — see
   skips the question only. A pipe or `--json` now refuses a `SAFE` command
   without `--yes` or `--dry-run`. `--complete` still asks only from `MEDIUM`.
 
+### Changed (toolchain)
+
+- The minimum supported Rust is now **1.85**
+  ([ADR 0026](docs/adr/0026-msrv-1-85.md)): `llama-cpp-2` needs `LazyLock`
+  (1.80), and the hand-held `clap`, `clap_lex`, and `indexmap` pins are gone.
+- `llama-cpp-2` 0.1.158 (MIT OR Apache-2.0) is an optional dependency behind the
+  `inference` feature. Only the dependency is wired; `LlamaEngine` (1.5) is not
+  written. Checked to compile on 1.85 with `--features inference`.
+
 ### Changed (licences)
 
 - `MPL-2.0` and `CDLA-Permissive-2.0` are accepted by `deny.toml`

@@ -291,23 +291,23 @@ loaded a model, and that is a bug in the test setup.
 
 ### The MSRV audit
 
-`rust-version = "1.75"` in `Cargo.toml` is a promise, and a `cargo update` can
+`rust-version = "1.85"` in `Cargo.toml` is a promise, and a `cargo update` can
 break it without touching a single line of this repository. Cargo does **not**
 downgrade a dependency that has already been locked, and it does not check
 `rust-version` of dependencies when resolving on behalf of a newer toolchain —
-so `cargo update` will happily resolve a crate that needs Rust 1.85 and leave
-you to discover it on someone else's 1.75 machine.
+so `cargo update` will happily resolve a crate that needs a newer Rust and leave
+you to discover it on someone else's 1.85 machine.
 
 Run this after any `cargo update` or `cargo add`:
 
 ```bash
-# Every package in the lockfile must declare rust-version <= 1.75.
+# Every package in the lockfile must declare rust-version <= 1.85.
 cargo metadata --format-version 1 --locked \
   | python3 -c "
 import json, sys
 def rv(s):
     return tuple(int(x) for x in s.split('.')) if s else (0, 0, 0)
-msrv = rv('1.75')
+msrv = rv('1.85')
 meta = json.load(sys.stdin)
 bad = [(p['name'], p['version'], p.get('rust_version'))
        for p in meta['packages'] if rv(p.get('rust_version')) > msrv]
@@ -315,7 +315,7 @@ if bad:
     for name, ver, need in bad:
         print(f'{name} {ver} needs {need}')
     sys.exit(1)
-print(f'OK: all {len(meta[\"packages\"])} packages build on 1.75')
+print(f'OK: all {len(meta[\"packages\"])} packages build on 1.85')
 "
 ```
 

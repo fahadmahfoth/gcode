@@ -102,7 +102,7 @@ persists in the mounted volume, never in the container layer.
 
 ## Method 4 — build from source
 
-You need Rust 1.75+.
+You need Rust 1.85+.
 
 ```bash
 git clone https://github.com/fahadmahfoth/gcode.git

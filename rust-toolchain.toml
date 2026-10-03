@@ -14,7 +14,7 @@
 #
 # What the pin gave up: the compiler is now the one build input the lockfile
 # does not pin. A new stable release can therefore change what compiles. The
-# mitigations are the MSRV floor in Cargo.toml (`rust-version = "1.75"`), CI
+# mitigations are the MSRV floor in Cargo.toml (`rust-version = "1.85"`), CI
 # building on several platforms, and the fact that a compiler regression shows
 # up as a red build rather than a subtly different binary. Revisit the exact pin
 # once CI can hold a toolchain image and the release matrix is stable.

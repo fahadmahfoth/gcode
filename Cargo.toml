@@ -2,7 +2,7 @@
 #
 # Constraints on this manifest come from the decision records, not from taste:
 #
-#   ADR 0002  Rust 1.75+, edition 2021, one static binary, panic = "abort",
+#   ADR 0002  Rust 1.85+ (ADR 0026), edition 2021, one static binary, panic = "abort",
 #             musl targets on Linux, and an FFI boundary to llama.cpp that is
 #             never allowed to leak into the classifier.
 #   ADR 0009  Dependencies come from crates.io with a committed Cargo.lock.
@@ -20,7 +20,7 @@
 name = "gcode"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 description = "Turns a sentence into a shell command, classifies the risk, and asks before it runs. Local-first and offline."
 license = "MIT"
 readme = "README.md"
@@ -35,12 +35,12 @@ publish = false
 default = []
 
 # Compiles the llama.cpp FFI boundary and the grammar-constrained decoder.
-# Empty until Phase 1.5 and 1.6 attach llama-cpp-rs and llguidance, because those
-# two crates carry the real inference cost and the rest of the project must stay
+# Pulls in llama-cpp-2 (ADR 0026 raised the MSRV for it), which builds llama.cpp
+# from source and needs cmake and a C++ compiler. The rest of the project stays
 # buildable without a C++ toolchain. Kept as an explicit, named switch from the
 # start so that the "no model, no inference code" state is a reviewable decision
 # and not an accident. See ADR 0002 and ADR 0003.
-inference = []
+inference = ["dep:llama-cpp-2"]
 
 # Permits the model downloader to reach the network. This is the ONLY feature
 # allowed to enable an HTTP client, and CI asserts that the corresponding code
@@ -64,23 +64,7 @@ anyhow = "1"
 dirs = "5"
 
 # Argument parsing for the CLI layer (Phase 1.1).
-#
-# The requirement is "4.5", not "4", and that is deliberate. clap 4.6 raised its
-# own `rust-version` to 1.85, which is above the 1.75 floor ADR 0002 sets. A
-# caret requirement of "4" would resolve to 4.6.x and then fail to build on a
-# 1.75 toolchain with a confusing error from inside a dependency. Pinning to the
-# 4.5 line keeps the whole tree resolvable at the declared MSRV.
-#
-# The lockfile additionally pins clap_lex to 1.0.1 for the same reason: its
-# 1.1.x line also requires 1.85. `cargo update` will happily undo both, so the
-# MSRV audit in docs/TESTING.md is not optional.
-clap = { version = ">=4.5, <4.6", features = ["derive"] }
-
-# MSRV pins for transitive crates. Neither is used directly; the upper bounds
-# exist so that `cargo update` cannot move the lockfile past the 1.75 floor
-# (clap_lex 1.1 and indexmap 2.12 both require a newer compiler).
-clap_lex = ">=1.0, <1.1"
-indexmap = ">=2.11, <2.12"
+clap = { version = "4.5", features = ["derive"] }
 
 # Reading the config file (Phase 1.2). toml with the parse feature, and serde for
 # the derive. Both are pure: no I/O beyond reading a file, no network, no
@@ -115,6 +99,7 @@ serde_json = "1.0"
 # stack: one static binary (ADR 0002) and no version skew between what the
 # downloader trusts and what the host happens to have installed.
 ureq = { version = "3", optional = true, default-features = false, features = ["rustls"] }
+llama-cpp-2 = { version = "0.1.158", default-features = false, optional = true }
 
 # The build script re-parses models/registry.toml to enforce ADR 0010's rules at
 # compile time. It needs the same parser the library does, so that a rule written

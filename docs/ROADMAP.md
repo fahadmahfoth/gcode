@@ -327,8 +327,9 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
 `FakeEngine`, so the whole pipeline is testable in milliseconds without 400 MB.
 
 - [x] `InferenceEngine` trait as above, with `EngineInfo` and `GenParams`
-- [ ] `LlamaEngine::load(path, ModelParams)` — mmap, warm up — **⛔ needs
-      llama-cpp-rs, a C++ toolchain, and real weights; disk is at 281 MiB**
+- [ ] `LlamaEngine::load(path, ModelParams)` — mmap, warm up — **⛔ needs real
+      weights.** The dependency is in (`llama-cpp-2`, feature `inference`, MSRV
+      raised by ADR 0026) and compiles; cmake and clang are present
 - [x] Load once per process, cache behind a `OnceLock`; a second `install` is
       refused so test order cannot poison the cache
 - [x] `generate()` with temperature, top_p, max_tokens, seed; params validated
