@@ -18,10 +18,9 @@ allow = [
     "Unicode-3.0",
     # memchr is "Unlicense OR MIT"; MIT is accepted, so this is not relied on.
     "Unlicense",
-    # Beyond the ADR text. Both are already in the tree and need a maintainer
-    # decision recorded in an ADR amendment: option-ext (via dirs-sys) is
-    # file-level copyleft, webpki-roots (via ureq, `download` feature only) is a
-    # data licence.
+    # Beyond the ADR 0009 list, accepted in ADR 0025: option-ext (via dirs-sys)
+    # is file-level copyleft, webpki-roots (via ureq, `download` feature only) is
+    # a data licence.
     "MPL-2.0",
     "CDLA-Permissive-2.0",
 ]

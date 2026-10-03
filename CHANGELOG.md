@@ -49,6 +49,12 @@ This rule is what keeps the documentation honest — see
   skips the question only. A pipe or `--json` now refuses a `SAFE` command
   without `--yes` or `--dry-run`. `--complete` still asks only from `MEDIUM`.
 
+### Changed (licences)
+
+- `MPL-2.0` and `CDLA-Permissive-2.0` are accepted by `deny.toml`
+  ([ADR 0025](docs/adr/0025-two-licences-beyond-the-allowlist.md)); both were
+  already in the tree.
+
 ### Added
 
 - The executor (`src/exec/runner.rs`, [ADR 0023](docs/adr/0023-executor-inherits-stdio.md)):
