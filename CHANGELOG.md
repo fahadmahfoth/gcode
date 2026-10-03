@@ -49,7 +49,14 @@ This rule is what keeps the documentation honest — see
   skips the question only. A pipe or `--json` now refuses a `SAFE` command
   without `--yes` or `--dry-run`. `--complete` still asks only from `MEDIUM`.
 
-### Added (engine, unverified)
+### Changed (models)
+
+- All three registry entries are `verified = true`. Each was downloaded with
+  `gcode --download-model`, and its SHA256 and byte length were checked with
+  `sha256sum` independently of the tool. `cargo build --release --locked` now
+  passes, and `./scripts/ci.sh` exits 0 with nothing skipped.
+
+### Added (engine, run against a real model)
 
 - `LlamaEngine` (`src/inference/engine.rs`, feature `inference`): memory-mapped
   load with a one-token warm-up, a fresh context per generation, greedy or
@@ -59,10 +66,10 @@ This rule is what keeps the documentation honest — see
   is tokenised with special-token parsing off, so a file named `<|im_start|>` in
   the history is text, not a control token. `llama.cpp` logging is silenced.
   `main` loads it for generate, complete, and fix; sampling params now come from
-  `model.temperature`, `top_p`, and `max_tokens`. **Not run against a real model
-  yet**; the model download is blocked by the network policy. The stop rule
-  (`inference/stop.rs`) and the bounds are unit-tested; `tests/engine.rs` holds
-  four `#[ignore]`d tests for a real model.
+  `model.temperature`, `top_p`, and `max_tokens`. The four `#[ignore]`d tests in
+  `tests/engine.rs` pass against the real `qwen3-0.6b`. **Known defect:** with the
+  current zephyr-style prompt, the real binary answers `</s>` to every request;
+  see the prompt-format note in `docs/ROADMAP.md`.
 - The prompt for generate, complete, and fix now carries the real context:
   `runtime::collect_context` reads the cwd, OS, architecture, shell, git branch,
   dirty flag, last commit, and the last `context.history_entries` history records,

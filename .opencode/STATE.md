@@ -49,9 +49,11 @@ phases:
   - id: 1
     name: "Core inference pipeline"
     # The model registry now holds three real, commit-pinned entries (ADR 0018),
-    # but all are `verified = false`: the hashes are published by HuggingFace and
-    # have not been confirmed by a local download. A release build is refused
-    # until then. 1.4 is now finished: --list-models prints the registry and
+    # and, as of 2026-10-03, all three are `verified = true`: each was downloaded
+    # with --download-model and hashed with sha256sum. The release build passes.
+    # OPEN: a real run returns `</s>` for every request (zephyr prompt, Qwen3
+    # model); see the prompt-format note in docs/ROADMAP.md before 1.5 is called
+    # done. 1.4 is now finished: --list-models prints the registry and
     # --download-model [NAME] drives a real HTTPS transport (ureq behind the
     # `download` feature, ADR 0021), with stderr progress and resume. 1.5 (sampler)
     # and 1.6 (grammar) still need llama-cpp-rs, a C++ toolchain, real weights, and
@@ -174,8 +176,7 @@ last_verified: >-
   passed, the policy greps pass (network confined to src/model/download.rs), the
   credential scan matches only the two reviewed false positives,
   `mandoc -T lint docs/gcode.1` clean, and the documentation link check passes.
-  `cargo build --release --locked` is skipped by the `verified = false` gate;
-  `cargo audit` and `cargo deny` are not installed.
+  `cargo build --release --locked` passes (the registry is verified).
   `cargo llvm-cov --summary-only --all-features` reports 91.06 % lines /
   88.53 % regions; model/registry.rs 96.11 % lines; model/download.rs 88.57 %;
   runtime.rs 82.63 %.
@@ -207,8 +208,7 @@ last_command: "scripts/ci.sh (fmt, clippy, cargo test --all-features, cargo buil
 - Phase 1.4 is now finished: `--list-models` prints the embedded registry,
   `--download-model [NAME]` drives a real HTTPS transport (`ureq` behind the
   `download` feature, ADR 0021) with byte-range resume and a stderr progress line.
-  What remains unproven is the model itself: every entry is `verified = false`,
-  so a real download+hash is still the 🔒 step (ADR 0010).
+  The 🔒 download+hash step is done (2026-10-03).
 - Ctrl+C (ROADMAP 3.6) is resolved by decision, not by code: ADR 0022 records
   that gcode installs no signal handler and lets the operating system default
   terminate the process (`128 + SIGINT`). A `ctrlc` handler is process-wide and

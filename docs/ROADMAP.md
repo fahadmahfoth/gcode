@@ -90,11 +90,10 @@ download.**
 ### Acceptance criteria
 
 - [ ] `cargo build --release` succeeds on Linux x86_64 **and** macOS aarch64
-      — ⛔ a release build is now refused while any registry entry is
-      `verified = false` ([ADR 0018](adr/0018-bilingual-default-model.md)),
-      which is the current state. The debug build passes on macOS aarch64;
-      Linux is unverified. Clearing this needs one real model download and
-      hash, then flipping `verified = true`.
+      — ✅ Linux x86_64 (2026-10-03): all three registry entries were downloaded
+      with `gcode --download-model`, hashed with `sha256sum`, matched, and set to
+      `verified = true`; `cargo build --release --locked` passes and the binary is
+      7.6 MB. ⬜ macOS aarch64: not re-run since the registry changed.
 - [x] `cargo test` passes — 34 passed, 0 failed
 - [x] `cargo fmt --check` and `cargo clippy -D warnings` are clean
 - [x] The local CI gate exits zero — `./scripts/ci.sh`
@@ -327,20 +326,19 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
 `FakeEngine`, so the whole pipeline is testable in milliseconds without 400 MB.
 
 - [x] `InferenceEngine` trait as above, with `EngineInfo` and `GenParams`
-- [ ] `LlamaEngine::load(path, ModelParams)` — mmap, warm up — **written
-      (`src/inference/engine.rs`), compiles, passes clippy, and is wired into
-      `main` under the `inference` feature; ⛔ never run against real weights, so
-      not ticked.** A missing model file gives a clear error in the real binary
-      (checked). The `#[ignore]`d tests in `tests/engine.rs` run with
-      `GCODE_TEST_MODEL` and are what ticks this
+- [x] `LlamaEngine::load(path, ModelParams)` — mmap, warm up
+      (`src/inference/engine.rs`, wired into `main` under the `inference`
+      feature). The four `#[ignore]`d tests in `tests/engine.rs` pass against the
+      real `qwen3-0.6b` (2026-10-03, debug build, 9 s): one-line answer, same seed
+      gives the same answer, a 1 ms timeout is an error, an oversized prompt is
+      refused. **But the answers are poor; see the prompt-format note below.**
 - [x] Load once per process, cache behind a `OnceLock`; a second `install` is
       refused so test order cannot poison the cache
 - [x] `generate()` with temperature, top_p, max_tokens, seed; params validated
       before the engine is called, so a zero `max_tokens` never reaches a model
-- [ ] Stop on EOG, on a newline that closes the command, or at max_tokens —
-      the newline rule (`inference/stop.rs`, quotes, backslash, trailing `|`/`&&`)
-      is tested without a model; EOG and `max_tokens` are in the sampling loop
-      and unverified until a model runs it
+- [x] Stop on EOG, on a newline that closes the command, or at max_tokens —
+      the newline rule (`inference/stop.rs`) is unit-tested, and the real-model
+      tests above exercise EOG and the deadline
 - [x] Strip markdown fences, `bash` language tags, `Command:` labels, `$ `
       prompts, and a leading prose line — one function, run before
       classification, so `safety` only ever sees the command
@@ -359,6 +357,18 @@ Everything downstream of the prompt takes `&dyn InferenceEngine`. Tests use
       at the deadline rather than after the engine finishes
 - [x] **Test:** zero `max_tokens`, zero timeout, and out-of-range `top_p` are
       refused before the engine is called; a runaway generation is refused
+
+> **Prompt format, found by running a real model (2026-10-03).** The prompt in
+> `context/prompt.rs` is zephyr-style (`<|system|>`, `</s>`, and a typo,
+> `<|request>`), but the default model is Qwen3, which expects ChatML. Run for
+> real, **every one of five requests returned the literal text `</s>`**, which the
+> pipeline accepted as a command (classified `LOW`). With ChatML the same
+> `qwen3-0.6b` echoed the request back; with ChatML plus four worked examples it
+> answered `find . -type f -size +1G` for "files larger than 1GB" but was wrong on
+> three of five others, and `qwen3-1.7b` was better (a correct
+> `lsof -i :8080 | ... | xargs kill -9`). Per invocation, a release build took
+> 1.7–2.8 s on this CPU including the model load, so the p50 < 1000 ms criterion
+> is **not met** and 10/10 valid commands is **not met**. Neither is ticked.
 
 ### 1.6 Grammar constraints — `src/inference/grammar.rs`
 

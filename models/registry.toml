@@ -20,10 +20,10 @@
 # run work before the download.
 #
 # URLs are pinned to a Hugging Face commit, not a branch, so the bytes behind a
-# URL cannot change. The `sha256` values below are the content hashes Hugging
-# Face publishes in its git-LFS pointers for that commit; they are recorded here
-# so the download can be checked, but they are not yet `verified` until that
-# download is done once.
+# URL cannot change. The `sha256` values are the content hashes Hugging Face
+# publishes in its git-LFS pointers for that commit. All three entries were
+# downloaded with `gcode --download-model` on 2026-10-03, and `sha256sum` and the
+# byte length of each file were checked independently of the tool.
 #
 # The fields:
 #
@@ -48,7 +48,7 @@ default     = true
 context_size = 32768
 recommended_threads = 4
 license     = "Apache-2.0"
-verified    = false
+verified    = true
 
 [[model]]
 name        = "kitty-bash-llm"
@@ -60,7 +60,7 @@ default     = false
 context_size = 32768
 recommended_threads = 4
 license     = "Apache-2.0"
-verified    = false
+verified    = true
 
 [[model]]
 name        = "qwen3-1.7b"
@@ -72,4 +72,4 @@ default     = false
 context_size = 32768
 recommended_threads = 4
 license     = "Apache-2.0"
-verified    = false
+verified    = true
